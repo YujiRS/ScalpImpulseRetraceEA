@@ -3,12 +3,20 @@
 //| Closes a specific position on MA Flat + Range target reach        |
 //+------------------------------------------------------------------+
 #property copyright "CloseByFlatRangeEA"
-#property version   "1.00"
+#property version   "2.00"
 #property strict
 
 #include <Trade\Trade.mqh>
 
 //--- Enumerations
+enum ENUM_MARKET_MODE
+{
+   MM_FX     = 0,   // FX
+   MM_GOLD   = 1,   // GOLD
+   MM_CRYPTO = 2,   // CRYPTO
+   MM_CUSTOM = 3    // Custom (use inputs below)
+};
+
 enum ENUM_FLAT_MA_METHOD
 {
    FLAT_MA_SMA = 0,   // SMA
@@ -28,29 +36,32 @@ enum ENUM_FAILSAFE
    FS_NONE         = 1    // None
 };
 
+//--- G0: Market Mode
+input ENUM_MARKET_MODE   MarketMode            = MM_CUSTOM;       // Market mode preset
+
 //--- G1: Target
 input ulong              TargetTicket          = 0;
 input ENUM_TIMEFRAMES    SignalTF              = PERIOD_CURRENT;
 
-//--- G2: Flat Detection
+//--- G2: Flat Detection (used when MarketMode=Custom)
 input ENUM_FLAT_MA_METHOD FlatMaMethod         = FLAT_MA_SMA;     // MA method
 input int                FlatMaPeriod          = 21;              // MA period
 input int                FlatSlopeLookbackBars = 5;               // Slope lookback bars
 input int                ATRPeriod             = 14;              // ATR period
 input double             FlatSlopeAtrMult      = 0.10;            // Slope/ATR threshold
 
-//--- G3: Range
+//--- G3: Range (used when MarketMode=Custom)
 input int                RangeLookbackBars     = 10;              // Range lookback bars
 
 //--- G4: Exit Target
 input ENUM_EXIT_TARGET   ExitTarget            = EXIT_MID;        // Exit target
 
-//--- G5: Failsafe
+//--- G5: Failsafe (used when MarketMode=Custom)
 input int                WaitBarsAfterFlat     = 8;               // Max wait bars after flat
 input ENUM_FAILSAFE      FailSafe              = FS_MARKET_CLOSE; // Failsafe action
 
-//--- G6: 5MA Assist
-input bool               UseAssist5MA          = true;            // Use 5MA assist
+//--- G6: 5MA Assist (used when MarketMode=Custom)
+input bool               UseAssist5MA          = false;           // Use 5MA assist
 
 //--- G7: Label
 input bool               ShowPanel             = true;
@@ -74,6 +85,15 @@ string    g_stateInfo       = "";
 string    g_posDir          = "";
 long      g_posType         = -1;
 string    g_closeReason     = "";
+
+//--- Working copies (resolved from MarketMode or inputs)
+ENUM_FLAT_MA_METHOD w_flatMaMethod;
+int                 w_flatMaPeriod;
+int                 w_flatSlopeLookbackBars;
+double              w_flatSlopeAtrMult;
+int                 w_rangeLookbackBars;
+int                 w_waitBarsAfterFlat;
+bool                w_useAssist5MA;
 
 int       g_hMA             = INVALID_HANDLE;
 int       g_hATR            = INVALID_HANDLE;
@@ -99,6 +119,76 @@ const int LINE_HEIGHT       = 20;
 const int MAX_LINES         = 8;
 const int GONE_THRESHOLD    = 5;
 const int CLOSE_MAX_RETRY   = 10;
+
+//+------------------------------------------------------------------+
+string MarketModeToString()
+{
+   switch(MarketMode)
+   {
+      case MM_FX:     return "FX";
+      case MM_GOLD:   return "GOLD";
+      case MM_CRYPTO: return "CRYPTO";
+      case MM_CUSTOM: return "CUSTOM";
+   }
+   return "?";
+}
+
+//+------------------------------------------------------------------+
+void ApplyPreset()
+{
+   switch(MarketMode)
+   {
+      case MM_FX:
+         w_flatMaMethod         = FLAT_MA_SMA;
+         w_flatMaPeriod         = 21;
+         w_flatSlopeLookbackBars = 3;
+         w_flatSlopeAtrMult     = 0.03;
+         w_rangeLookbackBars    = 10;
+         w_waitBarsAfterFlat    = 4;
+         w_useAssist5MA         = false;
+         break;
+
+      case MM_GOLD:
+         w_flatMaMethod         = FLAT_MA_EMA;
+         w_flatMaPeriod         = 21;
+         w_flatSlopeLookbackBars = 3;
+         w_flatSlopeAtrMult     = 0.30;
+         w_rangeLookbackBars    = 20;
+         w_waitBarsAfterFlat    = 8;
+         w_useAssist5MA         = false;
+         break;
+
+      case MM_CRYPTO:
+         w_flatMaMethod         = FLAT_MA_EMA;
+         w_flatMaPeriod         = 13;
+         w_flatSlopeLookbackBars = 8;
+         w_flatSlopeAtrMult     = 0.03;
+         w_rangeLookbackBars    = 20;
+         w_waitBarsAfterFlat    = 12;
+         w_useAssist5MA         = false;
+         break;
+
+      case MM_CUSTOM:
+      default:
+         w_flatMaMethod         = FlatMaMethod;
+         w_flatMaPeriod         = FlatMaPeriod;
+         w_flatSlopeLookbackBars = FlatSlopeLookbackBars;
+         w_flatSlopeAtrMult     = FlatSlopeAtrMult;
+         w_rangeLookbackBars    = RangeLookbackBars;
+         w_waitBarsAfterFlat    = WaitBarsAfterFlat;
+         w_useAssist5MA         = UseAssist5MA;
+         break;
+   }
+
+   Print("[CloseByFlatRangeEA] MarketMode=", MarketModeToString(),
+         " MA=", (w_flatMaMethod == FLAT_MA_EMA ? "EMA" : "SMA"),
+         "(", w_flatMaPeriod, ")",
+         " SlopeLB=", w_flatSlopeLookbackBars,
+         " Mult=", DoubleToString(w_flatSlopeAtrMult, 2),
+         " RangeLB=", w_rangeLookbackBars,
+         " WaitBars=", w_waitBarsAfterFlat,
+         " 5MA=", (w_useAssist5MA ? "ON" : "OFF"));
+}
 
 //+------------------------------------------------------------------+
 string StateToString(EA_STATE s)
@@ -189,7 +279,7 @@ bool CheckPositionAlive()
 bool CheckFlat()
 {
    // Bar guard
-   int barsNeeded = FlatSlopeLookbackBars + 2;
+   int barsNeeded = w_flatSlopeLookbackBars + 2;
    if(Bars(_Symbol, SignalTF) < barsNeeded) return false;
 
    // MA[1] (most recent confirmed bar)
@@ -198,7 +288,7 @@ bool CheckFlat()
 
    // MA[1 + FlatSlopeLookbackBars]
    double maOld[1];
-   if(CopyBuffer(g_hMA, 0, 1 + FlatSlopeLookbackBars, 1, maOld) < 1) return false;
+   if(CopyBuffer(g_hMA, 0, 1 + w_flatSlopeLookbackBars, 1, maOld) < 1) return false;
 
    double slopePts = MathAbs(maCurr[0] - maOld[0]) / _Point;
 
@@ -209,12 +299,12 @@ bool CheckFlat()
    double atrPts = atrBuf[0] / _Point;
    if(atrPts <= 0) return false;
 
-   bool flat = (slopePts <= atrPts * FlatSlopeAtrMult);
+   bool flat = (slopePts <= atrPts * w_flatSlopeAtrMult);
 
    if(flat)
       Print("[CloseByFlatRangeEA] Flat detected: SlopePts=", DoubleToString(slopePts, 1),
             " ATRPts=", DoubleToString(atrPts, 1),
-            " Threshold=", DoubleToString(atrPts * FlatSlopeAtrMult, 1));
+            " Threshold=", DoubleToString(atrPts * w_flatSlopeAtrMult, 1));
 
    return flat;
 }
@@ -222,15 +312,15 @@ bool CheckFlat()
 //+------------------------------------------------------------------+
 bool LockRange()
 {
-   if(Bars(_Symbol, SignalTF) < RangeLookbackBars + 1) return false;
+   if(Bars(_Symbol, SignalTF) < w_rangeLookbackBars + 1) return false;
 
    double highBuf[];
    double lowBuf[];
-   ArrayResize(highBuf, RangeLookbackBars);
-   ArrayResize(lowBuf, RangeLookbackBars);
+   ArrayResize(highBuf, w_rangeLookbackBars);
+   ArrayResize(lowBuf, w_rangeLookbackBars);
 
-   if(CopyHigh(_Symbol, SignalTF, 1, RangeLookbackBars, highBuf) < RangeLookbackBars) return false;
-   if(CopyLow(_Symbol, SignalTF, 1, RangeLookbackBars, lowBuf) < RangeLookbackBars) return false;
+   if(CopyHigh(_Symbol, SignalTF, 1, w_rangeLookbackBars, highBuf) < w_rangeLookbackBars) return false;
+   if(CopyLow(_Symbol, SignalTF, 1, w_rangeLookbackBars, lowBuf) < w_rangeLookbackBars) return false;
 
    g_rangeHigh = highBuf[ArrayMaximum(highBuf)];
    g_rangeLow  = lowBuf[ArrayMinimum(lowBuf)];
@@ -279,7 +369,7 @@ bool CheckTargetReached()
 //+------------------------------------------------------------------+
 bool CheckAssist5MA()
 {
-   if(!UseAssist5MA) return false;
+   if(!w_useAssist5MA) return false;
    if(g_hAssistMA == INVALID_HANDLE) return false;
 
    // emaBuf[0] = bar[2] (older), emaBuf[1] = bar[1] (newer)
@@ -402,9 +492,12 @@ int OnInit()
       return INIT_SUCCEEDED;
    }
 
+   // Apply market mode preset
+   ApplyPreset();
+
    // Create indicator handles
-   ENUM_MA_METHOD maMethod = (FlatMaMethod == FLAT_MA_SMA) ? MODE_SMA : MODE_EMA;
-   g_hMA  = iMA(_Symbol, SignalTF, FlatMaPeriod, 0, maMethod, PRICE_CLOSE);
+   ENUM_MA_METHOD maMethod = (w_flatMaMethod == FLAT_MA_SMA) ? MODE_SMA : MODE_EMA;
+   g_hMA  = iMA(_Symbol, SignalTF, w_flatMaPeriod, 0, maMethod, PRICE_CLOSE);
    g_hATR = iATR(_Symbol, SignalTF, ATRPeriod);
 
    if(g_hMA == INVALID_HANDLE || g_hATR == INVALID_HANDLE)
@@ -413,7 +506,7 @@ int OnInit()
       return INIT_SUCCEEDED;
    }
 
-   if(UseAssist5MA)
+   if(w_useAssist5MA)
    {
       g_hAssistMA = iMA(_Symbol, SignalTF, 5, 0, MODE_EMA, PRICE_CLOSE);
       if(g_hAssistMA == INVALID_HANDLE)
@@ -547,10 +640,10 @@ void OnTick()
       g_waitBarsCount++;
 
       // Failsafe: bar count exceeded
-      if(g_waitBarsCount > WaitBarsAfterFlat)
+      if(g_waitBarsCount > w_waitBarsAfterFlat)
       {
          Print("[CloseByFlatRangeEA] WaitBars exceeded: ",
-               g_waitBarsCount, ">", WaitBarsAfterFlat);
+               g_waitBarsCount, ">", w_waitBarsAfterFlat);
          if(FailSafe == FS_MARKET_CLOSE)
             ExecuteClose("FailSafe: WaitBars exceeded");
          return;
@@ -561,7 +654,7 @@ void OnTick()
       {
          if(FailSafe == FS_MARKET_CLOSE)
             ExecuteClose("5MA assist (bar " + (string)g_waitBarsCount
-                         + "/" + (string)WaitBarsAfterFlat + ")");
+                         + "/" + (string)w_waitBarsAfterFlat + ")");
          return;
       }
 
@@ -580,7 +673,7 @@ void UpdatePanel()
    ArrayResize(lines, MAX_LINES);
    int count = 0;
 
-   lines[count++] = "FlatRangeEA  TF=" + EnumToString(SignalTF);
+   lines[count++] = "FlatRangeEA  " + MarketModeToString() + "  TF=" + EnumToString(SignalTF);
    lines[count++] = "Ticket: " + (string)TargetTicket + "  " + g_posDir;
    lines[count++] = "State: " + StateToString(g_state);
 
@@ -593,7 +686,7 @@ void UpdatePanel()
 
    if(g_state == ST_RANGE_LOCKED_WAIT_TARGET)
       lines[count++] = "Target=" + ExitTargetToString()
-                        + "  Bars=" + (string)g_waitBarsCount + "/" + (string)WaitBarsAfterFlat;
+                        + "  Bars=" + (string)g_waitBarsCount + "/" + (string)w_waitBarsAfterFlat;
 
    if(g_state == ST_CLOSE_REQUESTED)
       lines[count++] = "CloseRetry: " + (string)g_closeRetry + "/" + (string)CLOSE_MAX_RETRY;

@@ -1,9 +1,9 @@
 //+------------------------------------------------------------------+
 //| CloseByFlatRangeEA.mq5                                           |
-//| Closes a specific position on MA Flat + Range target reach        |
+//| Closes a specific position on MA Flat + Range breakout + ATR trail|
 //+------------------------------------------------------------------+
 #property copyright "CloseByFlatRangeEA"
-#property version   "2.00"
+#property version   "3.00"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -21,13 +21,6 @@ enum ENUM_FLAT_MA_METHOD
 {
    FLAT_MA_SMA = 0,   // SMA
    FLAT_MA_EMA = 1    // EMA
-};
-
-enum ENUM_EXIT_TARGET
-{
-   EXIT_MID              = 0,   // Mid
-   EXIT_FAVORABLE_EDGE   = 1,   // Favorable Edge
-   EXIT_UNFAVORABLE_EDGE = 2    // Unfavorable Edge
 };
 
 enum ENUM_FAILSAFE
@@ -53,15 +46,12 @@ input double             FlatSlopeAtrMult      = 0.10;            // Slope/ATR t
 //--- G3: Range (used when MarketMode=Custom)
 input int                RangeLookbackBars     = 10;              // Range lookback bars
 
-//--- G4: Exit Target
-input ENUM_EXIT_TARGET   ExitTarget            = EXIT_MID;        // Exit target
+//--- G4: Trail
+input double             TrailATRMult          = 1.0;             // ATR multiplier for trailing stop
 
 //--- G5: Failsafe (used when MarketMode=Custom)
-input int                WaitBarsAfterFlat     = 8;               // Max wait bars after flat
+input int                WaitBarsAfterFlat     = 30;              // Max wait bars after flat (safety valve)
 input ENUM_FAILSAFE      FailSafe              = FS_MARKET_CLOSE; // Failsafe action
-
-//--- G6: 5MA Assist (used when MarketMode=Custom)
-input bool               UseAssist5MA          = false;           // Use 5MA assist
 
 //--- G7: Label
 input bool               ShowPanel             = true;
@@ -69,12 +59,16 @@ input int                LabelX                = 10;
 input int                LabelY                = 20;
 input int                LabelRow              = 0;
 
+//--- G8: Event Log
+input bool               EnableEventLog        = true;            // Write event log TSV
+
 //--- State machine
 enum EA_STATE
 {
    ST_WAIT_POSITION,
    ST_WAIT_FLAT,
-   ST_RANGE_LOCKED_WAIT_TARGET,
+   ST_RANGE_LOCKED,
+   ST_TRAILING,
    ST_CLOSE_REQUESTED,
    ST_CLOSED,
    ST_ERROR
@@ -93,11 +87,9 @@ int                 w_flatSlopeLookbackBars;
 double              w_flatSlopeAtrMult;
 int                 w_rangeLookbackBars;
 int                 w_waitBarsAfterFlat;
-bool                w_useAssist5MA;
 
 int       g_hMA             = INVALID_HANDLE;
 int       g_hATR            = INVALID_HANDLE;
-int       g_hAssistMA       = INVALID_HANDLE;
 
 datetime  g_lastBar         = 0;
 
@@ -111,12 +103,28 @@ int       g_goneCount       = 0;
 int       g_closeRetry      = 0;
 datetime  g_lastCloseTime   = 0;
 
+//--- Trailing
+double    g_trailPeak       = 0.0;
+double    g_trailLine       = 0.0;
+
+//--- Event log
+int       g_logHandle       = INVALID_HANDLE;
+string    g_logFileName     = "";
+datetime  g_entryTime       = 0;
+double    g_entryPrice      = 0.0;
+int       g_barsFromEntry   = 0;
+int       g_barsFromFlat    = 0;
+double    g_flatSlopePts    = 0.0;
+double    g_flatATRPts      = 0.0;
+double    g_closePrice      = 0.0;
+double    g_closePnLPips    = 0.0;
+
 string    g_objPrefix       = "";
 CTrade    g_trade;
 
 const int FONT_SIZE         = 9;
 const int LINE_HEIGHT       = 20;
-const int MAX_LINES         = 8;
+const int MAX_LINES         = 10;
 const int GONE_THRESHOLD    = 5;
 const int CLOSE_MAX_RETRY   = 10;
 
@@ -144,8 +152,7 @@ void ApplyPreset()
          w_flatSlopeLookbackBars = 3;
          w_flatSlopeAtrMult     = 0.03;
          w_rangeLookbackBars    = 10;
-         w_waitBarsAfterFlat    = 4;
-         w_useAssist5MA         = false;
+         w_waitBarsAfterFlat    = 16;
          break;
 
       case MM_GOLD:
@@ -154,8 +161,7 @@ void ApplyPreset()
          w_flatSlopeLookbackBars = 3;
          w_flatSlopeAtrMult     = 0.30;
          w_rangeLookbackBars    = 20;
-         w_waitBarsAfterFlat    = 8;
-         w_useAssist5MA         = false;
+         w_waitBarsAfterFlat    = 30;
          break;
 
       case MM_CRYPTO:
@@ -164,8 +170,7 @@ void ApplyPreset()
          w_flatSlopeLookbackBars = 8;
          w_flatSlopeAtrMult     = 0.03;
          w_rangeLookbackBars    = 20;
-         w_waitBarsAfterFlat    = 12;
-         w_useAssist5MA         = false;
+         w_waitBarsAfterFlat    = 40;
          break;
 
       case MM_CUSTOM:
@@ -176,7 +181,6 @@ void ApplyPreset()
          w_flatSlopeAtrMult     = FlatSlopeAtrMult;
          w_rangeLookbackBars    = RangeLookbackBars;
          w_waitBarsAfterFlat    = WaitBarsAfterFlat;
-         w_useAssist5MA         = UseAssist5MA;
          break;
    }
 
@@ -187,7 +191,7 @@ void ApplyPreset()
          " Mult=", DoubleToString(w_flatSlopeAtrMult, 2),
          " RangeLB=", w_rangeLookbackBars,
          " WaitBars=", w_waitBarsAfterFlat,
-         " 5MA=", (w_useAssist5MA ? "ON" : "OFF"));
+         " TrailATR=", DoubleToString(TrailATRMult, 2));
 }
 
 //+------------------------------------------------------------------+
@@ -195,36 +199,31 @@ string StateToString(EA_STATE s)
 {
    switch(s)
    {
-      case ST_WAIT_POSITION:            return "WAIT_POSITION";
-      case ST_WAIT_FLAT:                return "WAIT_FLAT";
-      case ST_RANGE_LOCKED_WAIT_TARGET: return "WAIT_TARGET";
-      case ST_CLOSE_REQUESTED:          return "CLOSE_REQUESTED";
-      case ST_CLOSED:                   return "CLOSED";
-      case ST_ERROR:                    return "ERROR";
+      case ST_WAIT_POSITION:  return "WAIT_POSITION";
+      case ST_WAIT_FLAT:      return "WAIT_FLAT";
+      case ST_RANGE_LOCKED:   return "RANGE_LOCKED";
+      case ST_TRAILING:       return "TRAILING";
+      case ST_CLOSE_REQUESTED: return "CLOSE_REQUESTED";
+      case ST_CLOSED:         return "CLOSED";
+      case ST_ERROR:          return "ERROR";
    }
    return "UNKNOWN";
 }
 
 //+------------------------------------------------------------------+
-string ExitTargetToString()
-{
-   switch(ExitTarget)
-   {
-      case EXIT_MID:              return "MID";
-      case EXIT_FAVORABLE_EDGE:   return "FAV_EDGE";
-      case EXIT_UNFAVORABLE_EDGE: return "UNFAV_EDGE";
-   }
-   return "?";
-}
-
-//+------------------------------------------------------------------+
 void SetState(EA_STATE s, string info="")
 {
+   EA_STATE prev = g_state;
    g_state = s;
    g_stateInfo = info;
    Print("[CloseByFlatRangeEA] State -> ", StateToString(s),
          (info != "" ? " | " + info : ""),
          " | Ticket=", TargetTicket);
+
+   // Write CLOSE event when transitioning to ST_CLOSED
+   if(s == ST_CLOSED && prev != ST_CLOSED)
+      WriteEventLog("CLOSE", g_closeReason);
+
    UpdatePanel();
 }
 
@@ -267,6 +266,7 @@ bool CheckPositionAlive()
    g_goneCount++;
    if(g_goneCount >= GONE_THRESHOLD)
    {
+      g_closeReason = "PositionGone";
       SetState(ST_CLOSED, "Position gone (" + (string)GONE_THRESHOLD + " consecutive checks)");
       return false;
    }
@@ -302,9 +302,15 @@ bool CheckFlat()
    bool flat = (slopePts <= atrPts * w_flatSlopeAtrMult);
 
    if(flat)
+   {
+      // Cache for event log
+      g_flatSlopePts = slopePts;
+      g_flatATRPts   = atrPts;
+
       Print("[CloseByFlatRangeEA] Flat detected: SlopePts=", DoubleToString(slopePts, 1),
             " ATRPts=", DoubleToString(atrPts, 1),
             " Threshold=", DoubleToString(atrPts * w_flatSlopeAtrMult, 1));
+   }
 
    return flat;
 }
@@ -335,77 +341,97 @@ bool LockRange()
 }
 
 //+------------------------------------------------------------------+
-bool CheckTargetReached()
+// Returns: 0 = no breakout, 1 = favorable, -1 = unfavorable
+int CheckBreakout()
 {
-   double price;
+   double closeBuf[1];
+   if(CopyClose(_Symbol, SignalTF, 1, 1, closeBuf) < 1) return 0;
+   double closePrice = closeBuf[0];
+
    if(g_posType == POSITION_TYPE_BUY)
-      price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   else
-      price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-
-   switch(ExitTarget)
    {
-      case EXIT_MID:
-         if(g_posType == POSITION_TYPE_BUY)
-            return (price >= g_rangeMid);
-         else
-            return (price <= g_rangeMid);
-
-      case EXIT_FAVORABLE_EDGE:
-         if(g_posType == POSITION_TYPE_BUY)
-            return (price >= g_rangeHigh);
-         else
-            return (price <= g_rangeLow);
-
-      case EXIT_UNFAVORABLE_EDGE:
-         if(g_posType == POSITION_TYPE_BUY)
-            return (price <= g_rangeLow);
-         else
-            return (price >= g_rangeHigh);
+      if(closePrice < g_rangeLow)  return -1;  // unfavorable
+      if(closePrice > g_rangeHigh) return  1;  // favorable
    }
-   return false;
+   else // SELL
+   {
+      if(closePrice > g_rangeHigh) return -1;  // unfavorable
+      if(closePrice < g_rangeLow)  return  1;  // favorable
+   }
+   return 0; // still in range
 }
 
 //+------------------------------------------------------------------+
-bool CheckAssist5MA()
+// Returns true if trailing stop is hit (close signal)
+bool UpdateTrailing()
 {
-   if(!w_useAssist5MA) return false;
-   if(g_hAssistMA == INVALID_HANDLE) return false;
+   // Get confirmed bar High, Low, Close
+   double highBuf[1], lowBuf[1], closeBuf[1];
+   if(CopyHigh(_Symbol, SignalTF, 1, 1, highBuf) < 1) return false;
+   if(CopyLow(_Symbol, SignalTF, 1, 1, lowBuf) < 1) return false;
+   if(CopyClose(_Symbol, SignalTF, 1, 1, closeBuf) < 1) return false;
 
-   // emaBuf[0] = bar[2] (older), emaBuf[1] = bar[1] (newer)
-   double emaBuf[2];
-   if(CopyBuffer(g_hAssistMA, 0, 1, 2, emaBuf) < 2) return false;
+   // Get ATR[1]
+   double atrBuf[1];
+   if(CopyBuffer(g_hATR, 0, 1, 1, atrBuf) < 1) return false;
+   if(atrBuf[0] <= 0) return false;
+
+   double closePrice = closeBuf[0];
 
    if(g_posType == POSITION_TYPE_BUY)
    {
-      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      // 1) Price not at MID yet  2) EMA5 turning down  3) At/below unfavorable edge
-      if(bid < g_rangeMid && emaBuf[1] < emaBuf[0] && bid <= g_rangeLow)
+      // Update peak (highest High since favorable breakout)
+      if(highBuf[0] > g_trailPeak)
+         g_trailPeak = highBuf[0];
+
+      // Trailing line = peak - ATR * mult
+      g_trailLine = g_trailPeak - atrBuf[0] * TrailATRMult;
+
+      // Exit when confirmed bar close crosses below trailing line
+      if(closePrice < g_trailLine)
       {
-         Print("[CloseByFlatRangeEA] 5MA assist: Bid=", DoubleToString(bid, _Digits),
-               " < Mid=", DoubleToString(g_rangeMid, _Digits),
-               " EMA5[1]=", DoubleToString(emaBuf[1], _Digits),
-               " < EMA5[2]=", DoubleToString(emaBuf[0], _Digits),
-               " Bid<=RangeLow=", DoubleToString(g_rangeLow, _Digits));
+         Print("[CloseByFlatRangeEA] TrailStop hit: Close=", DoubleToString(closePrice, _Digits),
+               " < TrailLine=", DoubleToString(g_trailLine, _Digits),
+               " Peak=", DoubleToString(g_trailPeak, _Digits));
          return true;
       }
    }
-   else
+   else // SELL
    {
-      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-      // 1) Price not at MID yet  2) EMA5 turning up  3) At/above unfavorable edge
-      if(ask > g_rangeMid && emaBuf[1] > emaBuf[0] && ask >= g_rangeHigh)
+      // Update peak (lowest Low since favorable breakout)
+      if(lowBuf[0] < g_trailPeak)
+         g_trailPeak = lowBuf[0];
+
+      // Trailing line = peak + ATR * mult
+      g_trailLine = g_trailPeak + atrBuf[0] * TrailATRMult;
+
+      // Exit when confirmed bar close crosses above trailing line
+      if(closePrice > g_trailLine)
       {
-         Print("[CloseByFlatRangeEA] 5MA assist: Ask=", DoubleToString(ask, _Digits),
-               " > Mid=", DoubleToString(g_rangeMid, _Digits),
-               " EMA5[1]=", DoubleToString(emaBuf[1], _Digits),
-               " > EMA5[2]=", DoubleToString(emaBuf[0], _Digits),
-               " Ask>=RangeHigh=", DoubleToString(g_rangeHigh, _Digits));
+         Print("[CloseByFlatRangeEA] TrailStop hit: Close=", DoubleToString(closePrice, _Digits),
+               " > TrailLine=", DoubleToString(g_trailLine, _Digits),
+               " Peak=", DoubleToString(g_trailPeak, _Digits));
          return true;
       }
    }
 
-   return false;
+   return false;  // keep trailing
+}
+
+//+------------------------------------------------------------------+
+void CaptureClosePrice()
+{
+   g_closePrice = 0.0;
+   g_closePnLPips = 0.0;
+
+   if(PositionSelectByTicket(TargetTicket))
+   {
+      g_closePrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+      if(g_posType == POSITION_TYPE_BUY)
+         g_closePnLPips = (g_closePrice - g_entryPrice) / _Point;
+      else
+         g_closePnLPips = (g_entryPrice - g_closePrice) / _Point;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -420,6 +446,9 @@ void ExecuteClose(string reason)
       SetState(ST_CLOSED, "Position gone before close: " + reason);
       return;
    }
+
+   // Capture close price before attempting close
+   CaptureClosePrice();
 
    g_closeRetry++;
    Print("[CloseByFlatRangeEA] Closing ticket ", TargetTicket,
@@ -469,6 +498,9 @@ void HandleCloseRetry()
    Print("[CloseByFlatRangeEA] Retry close ticket ", TargetTicket,
          " attempt=", g_closeRetry, "/", CLOSE_MAX_RETRY);
 
+   // Re-capture close price on retry
+   CaptureClosePrice();
+
    if(g_trade.PositionClose(TargetTicket))
    {
       SetState(ST_CLOSED, g_closeReason);
@@ -479,6 +511,134 @@ void HandleCloseRetry()
             " ", g_trade.ResultRetcodeDescription());
       UpdatePanel();
    }
+}
+
+//+------------------------------------------------------------------+
+//| Event Log (TSV)                                                   |
+//+------------------------------------------------------------------+
+void InitEventLog()
+{
+   if(!EnableEventLog) return;
+
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   g_logFileName = StringFormat("FlatRangeLog_%04d%02d%02d_%s_%llu.tsv",
+                                dt.year, dt.mon, dt.day, _Symbol, TargetTicket);
+
+   bool exists = FileIsExist(g_logFileName);
+
+   g_logHandle = FileOpen(g_logFileName,
+                          FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI
+                          | FILE_SHARE_WRITE | FILE_SHARE_READ, '\t');
+
+   if(g_logHandle == INVALID_HANDLE)
+   {
+      Print("[CloseByFlatRangeEA] ERROR: Cannot open event log: ", g_logFileName);
+      return;
+   }
+
+   if(exists)
+   {
+      FileSeek(g_logHandle, 0, SEEK_END);
+   }
+   else
+   {
+      string header = "Time\tEvent\tTicket\tSymbol\tDir\t"
+                      "EntryPrice\tEntryTime\tSpread\tHour\t"
+                      "BarsFromEntry\tSlopePts\tATRPts\t"
+                      "RangeHigh\tRangeLow\tRangeMid\tEntryPosInRange\t"
+                      "Reason\tClosePrice\tPnLPips\tBarsFromFlat";
+      FileWriteString(g_logHandle, header + "\n");
+      FileFlush(g_logHandle);
+   }
+}
+
+//+------------------------------------------------------------------+
+void WriteEventLog(string eventType, string reason = "")
+{
+   if(g_logHandle == INVALID_HANDLE) return;
+
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+
+   // Common columns: Time, Event, Ticket, Symbol, Dir
+   string line = TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS) + "\t"
+               + eventType + "\t"
+               + (string)TargetTicket + "\t"
+               + _Symbol + "\t"
+               + g_posDir + "\t";
+
+   if(eventType == "ATTACH")
+   {
+      // EntryPrice, EntryTime, Spread, Hour
+      line += DoubleToString(g_entryPrice, _Digits) + "\t"
+            + TimeToString(g_entryTime, TIME_DATE | TIME_SECONDS) + "\t"
+            + (string)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) + "\t"
+            + (string)dt.hour + "\t";
+      // Pad: BarsFromEntry, SlopePts, ATRPts, RangeHigh, RangeLow, RangeMid, EntryPosInRange, Reason, ClosePrice, PnLPips, BarsFromFlat
+      line += "\t\t\t\t\t\t\t\t\t\t";
+   }
+   else if(eventType == "FLAT")
+   {
+      // Pad: EntryPrice, EntryTime, Spread, Hour
+      line += "\t\t\t\t";
+      // BarsFromEntry, SlopePts, ATRPts
+      line += (string)g_barsFromEntry + "\t"
+            + DoubleToString(g_flatSlopePts, 1) + "\t"
+            + DoubleToString(g_flatATRPts, 1) + "\t";
+      // Pad: RangeHigh, RangeLow, RangeMid, EntryPosInRange, Reason, ClosePrice, PnLPips, BarsFromFlat
+      line += "\t\t\t\t\t\t\t";
+   }
+   else if(eventType == "RANGE")
+   {
+      // Pad: EntryPrice, EntryTime, Spread, Hour, BarsFromEntry, SlopePts, ATRPts
+      line += "\t\t\t\t\t\t\t";
+      // RangeHigh, RangeLow, RangeMid, EntryPosInRange
+      double entryPosInRange = 0.0;
+      if(g_rangeHigh > g_rangeLow)
+         entryPosInRange = (g_entryPrice - g_rangeLow) / (g_rangeHigh - g_rangeLow);
+      line += DoubleToString(g_rangeHigh, _Digits) + "\t"
+            + DoubleToString(g_rangeLow, _Digits) + "\t"
+            + DoubleToString(g_rangeMid, _Digits) + "\t"
+            + DoubleToString(entryPosInRange, 2) + "\t";
+      // Pad: Reason, ClosePrice, PnLPips, BarsFromFlat
+      line += "\t\t\t";
+   }
+   else if(eventType == "CLOSE")
+   {
+      // Pad: EntryPrice, EntryTime, Spread, Hour, BarsFromEntry, SlopePts, ATRPts, RangeHigh, RangeLow, RangeMid, EntryPosInRange
+      line += "\t\t\t\t\t\t\t\t\t\t\t";
+      // Reason, ClosePrice, PnLPips, BarsFromFlat
+      line += reason + "\t"
+            + DoubleToString(g_closePrice, _Digits) + "\t"
+            + DoubleToString(g_closePnLPips, 1) + "\t"
+            + (string)g_barsFromFlat;
+   }
+
+   FileWriteString(g_logHandle, line + "\n");
+   FileFlush(g_logHandle);
+}
+
+//+------------------------------------------------------------------+
+void DeinitEventLog()
+{
+   if(g_logHandle != INVALID_HANDLE)
+   {
+      FileClose(g_logHandle);
+      g_logHandle = INVALID_HANDLE;
+   }
+}
+
+//+------------------------------------------------------------------+
+void CacheEntryInfo()
+{
+   if(PositionSelectByTicket(TargetTicket))
+   {
+      g_entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      g_entryTime  = (datetime)PositionGetInteger(POSITION_TIME);
+   }
+   g_barsFromEntry = 0;
+   g_barsFromFlat  = 0;
 }
 
 //+------------------------------------------------------------------+
@@ -506,15 +666,8 @@ int OnInit()
       return INIT_SUCCEEDED;
    }
 
-   if(w_useAssist5MA)
-   {
-      g_hAssistMA = iMA(_Symbol, SignalTF, 5, 0, MODE_EMA, PRICE_CLOSE);
-      if(g_hAssistMA == INVALID_HANDLE)
-      {
-         SetState(ST_ERROR, "Failed to create AssistMA handle");
-         return INIT_SUCCEEDED;
-      }
-   }
+   // Init event log
+   InitEventLog();
 
    // Check if target position exists
    if(!PositionExists())
@@ -545,6 +698,12 @@ int OnInit()
    g_waitBarsCount = 0;
    g_goneCount     = 0;
    g_closeRetry    = 0;
+   g_trailPeak     = 0.0;
+   g_trailLine     = 0.0;
+
+   // Cache entry info and write ATTACH event
+   CacheEntryInfo();
+   WriteEventLog("ATTACH");
 
    SetState(ST_WAIT_FLAT);
    return INIT_SUCCEEDED;
@@ -553,9 +712,9 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   if(g_hMA != INVALID_HANDLE)       IndicatorRelease(g_hMA);
-   if(g_hATR != INVALID_HANDLE)      IndicatorRelease(g_hATR);
-   if(g_hAssistMA != INVALID_HANDLE) IndicatorRelease(g_hAssistMA);
+   if(g_hMA != INVALID_HANDLE)  IndicatorRelease(g_hMA);
+   if(g_hATR != INVALID_HANDLE) IndicatorRelease(g_hATR);
+   DeinitEventLog();
    DeletePanel();
 }
 
@@ -593,25 +752,24 @@ void OnTick()
       g_posDir  = (g_posType == POSITION_TYPE_BUY) ? "BUY" : "SELL";
       g_lastBar = iTime(_Symbol, SignalTF, 0);
 
+      // Cache entry info and write ATTACH event
+      CacheEntryInfo();
+      WriteEventLog("ATTACH");
+
       SetState(ST_WAIT_FLAT);
       return;
    }
 
-   //--- Position alive check
+   //--- Position alive check (tick-level)
    if(!CheckPositionAlive()) return;
 
-   //--- Tick-level target check
-   if(g_state == ST_RANGE_LOCKED_WAIT_TARGET)
-   {
-      if(CheckTargetReached())
-      {
-         ExecuteClose("Target(" + ExitTargetToString() + ") reached");
-         return;
-      }
-   }
-
-   //--- New bar gate
+   //--- New bar gate (all signal checks are confirmed-bar only)
    if(!IsNewBar()) return;
+
+   //--- Increment bar counters
+   g_barsFromEntry++;
+   if(g_state == ST_RANGE_LOCKED || g_state == ST_TRAILING)
+      g_barsFromFlat++;
 
    //--- ST_WAIT_FLAT: flat detection on confirmed bar
    if(g_state == ST_WAIT_FLAT)
@@ -621,7 +779,13 @@ void OnTick()
          if(LockRange())
          {
             g_waitBarsCount = 0;
-            SetState(ST_RANGE_LOCKED_WAIT_TARGET,
+            g_barsFromFlat  = 0;
+
+            // Write FLAT and RANGE events
+            WriteEventLog("FLAT");
+            WriteEventLog("RANGE");
+
+            SetState(ST_RANGE_LOCKED,
                      "Range=[" + DoubleToString(g_rangeLow, _Digits)
                      + ".." + DoubleToString(g_rangeHigh, _Digits) + "]"
                      + " Mid=" + DoubleToString(g_rangeMid, _Digits));
@@ -634,12 +798,50 @@ void OnTick()
       return;
    }
 
-   //--- ST_RANGE_LOCKED_WAIT_TARGET: bar-level checks
-   if(g_state == ST_RANGE_LOCKED_WAIT_TARGET)
+   //--- ST_RANGE_LOCKED: breakout detection on confirmed bar
+   if(g_state == ST_RANGE_LOCKED)
    {
       g_waitBarsCount++;
 
-      // Failsafe: bar count exceeded
+      // 1. Check breakout
+      int breakout = CheckBreakout();
+
+      if(breakout < 0)
+      {
+         // Unfavorable breakout -> immediate close
+         ExecuteClose("UnfavBreak");
+         return;
+      }
+
+      if(breakout > 0)
+      {
+         // Favorable breakout -> initialize trailing and transition
+         double highBuf[1], lowBuf[1];
+         CopyHigh(_Symbol, SignalTF, 1, 1, highBuf);
+         CopyLow(_Symbol, SignalTF, 1, 1, lowBuf);
+
+         if(g_posType == POSITION_TYPE_BUY)
+            g_trailPeak = highBuf[0];
+         else
+            g_trailPeak = lowBuf[0];
+
+         // Calculate initial trail line
+         double atrBuf[1];
+         if(CopyBuffer(g_hATR, 0, 1, 1, atrBuf) >= 1 && atrBuf[0] > 0)
+         {
+            if(g_posType == POSITION_TYPE_BUY)
+               g_trailLine = g_trailPeak - atrBuf[0] * TrailATRMult;
+            else
+               g_trailLine = g_trailPeak + atrBuf[0] * TrailATRMult;
+         }
+
+         SetState(ST_TRAILING,
+                  "FavBreakout Peak=" + DoubleToString(g_trailPeak, _Digits)
+                  + " Trail=" + DoubleToString(g_trailLine, _Digits));
+         return;
+      }
+
+      // 2. No breakout -- check WaitBars safety valve
       if(g_waitBarsCount > w_waitBarsAfterFlat)
       {
          Print("[CloseByFlatRangeEA] WaitBars exceeded: ",
@@ -649,15 +851,20 @@ void OnTick()
          return;
       }
 
-      // 5MA assist
-      if(CheckAssist5MA())
+      UpdatePanel();
+      return;
+   }
+
+   //--- ST_TRAILING: ATR trailing on confirmed bar
+   if(g_state == ST_TRAILING)
+   {
+      if(UpdateTrailing())
       {
-         if(FailSafe == FS_MARKET_CLOSE)
-            ExecuteClose("5MA assist (bar " + (string)g_waitBarsCount
-                         + "/" + (string)w_waitBarsAfterFlat + ")");
+         // Trailing stop hit -> close position
+         ExecuteClose("TrailStop Peak=" + DoubleToString(g_trailPeak, _Digits)
+                      + " Line=" + DoubleToString(g_trailLine, _Digits));
          return;
       }
-
       UpdatePanel();
    }
 }
@@ -684,9 +891,12 @@ void UpdatePanel()
                         + " Mid=" + DoubleToString(g_rangeMid, _Digits);
    }
 
-   if(g_state == ST_RANGE_LOCKED_WAIT_TARGET)
-      lines[count++] = "Target=" + ExitTargetToString()
-                        + "  Bars=" + (string)g_waitBarsCount + "/" + (string)w_waitBarsAfterFlat;
+   if(g_state == ST_RANGE_LOCKED)
+      lines[count++] = "Bars=" + (string)g_waitBarsCount + "/" + (string)w_waitBarsAfterFlat;
+
+   if(g_state == ST_TRAILING && count < MAX_LINES)
+      lines[count++] = "Peak=" + DoubleToString(g_trailPeak, _Digits)
+                        + "  Trail=" + DoubleToString(g_trailLine, _Digits);
 
    if(g_state == ST_CLOSE_REQUESTED)
       lines[count++] = "CloseRetry: " + (string)g_closeRetry + "/" + (string)CLOSE_MAX_RETRY;
@@ -715,12 +925,13 @@ void UpdatePanel()
       ObjectSetString(0, name, OBJPROP_TEXT, lines[i]);
 
       color clr = clrWhite;
-      if(g_state == ST_WAIT_POSITION)            clr = clrGray;
-      if(g_state == ST_WAIT_FLAT)                clr = clrYellow;
-      if(g_state == ST_RANGE_LOCKED_WAIT_TARGET) clr = clrDodgerBlue;
-      if(g_state == ST_CLOSE_REQUESTED)          clr = clrOrange;
-      if(g_state == ST_CLOSED)                   clr = clrLime;
-      if(g_state == ST_ERROR)                    clr = clrRed;
+      if(g_state == ST_WAIT_POSITION)  clr = clrGray;
+      if(g_state == ST_WAIT_FLAT)      clr = clrYellow;
+      if(g_state == ST_RANGE_LOCKED)   clr = clrDodgerBlue;
+      if(g_state == ST_TRAILING)       clr = clrMagenta;
+      if(g_state == ST_CLOSE_REQUESTED) clr = clrOrange;
+      if(g_state == ST_CLOSED)         clr = clrLime;
+      if(g_state == ST_ERROR)          clr = clrRed;
       ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
    }
 

@@ -224,6 +224,12 @@ void SetState(EA_STATE s, string info="")
    if(s == ST_CLOSED && prev != ST_CLOSED)
       WriteEventLog("CLOSE", g_closeReason);
 
+   // State persistence
+   if(s >= ST_RANGE_LOCKED && s <= ST_TRAILING)
+      SaveState();
+   else if(s == ST_CLOSED || s == ST_ERROR)
+      ClearSavedState();
+
    UpdatePanel();
 }
 
@@ -614,6 +620,29 @@ void WriteEventLog(string eventType, string reason = "")
             + DoubleToString(g_closePnLPips, 1) + "\t"
             + (string)g_barsFromFlat;
    }
+   else if(eventType == "RESTORE")
+   {
+      // Pad: EntryPrice, EntryTime, Spread
+      line += "\t\t\t";
+      // Hour
+      line += (string)dt.hour + "\t";
+      // BarsFromEntry
+      line += (string)g_barsFromEntry + "\t";
+      // Pad: SlopePts, ATRPts
+      line += "\t\t";
+      // RangeHigh, RangeLow, RangeMid, EntryPosInRange
+      double entryPosInRange = 0.0;
+      if(g_rangeHigh > g_rangeLow)
+         entryPosInRange = (g_entryPrice - g_rangeLow) / (g_rangeHigh - g_rangeLow);
+      line += DoubleToString(g_rangeHigh, _Digits) + "\t"
+            + DoubleToString(g_rangeLow, _Digits) + "\t"
+            + DoubleToString(g_rangeMid, _Digits) + "\t"
+            + DoubleToString(entryPosInRange, 2) + "\t";
+      // Reason, Pad: ClosePrice, PnLPips
+      line += reason + "\t\t\t";
+      // BarsFromFlat
+      line += (string)g_barsFromFlat;
+   }
 
    FileWriteString(g_logHandle, line + "\n");
    FileFlush(g_logHandle);
@@ -639,6 +668,87 @@ void CacheEntryInfo()
    }
    g_barsFromEntry = 0;
    g_barsFromFlat  = 0;
+}
+
+//+------------------------------------------------------------------+
+//| State Persistence (GlobalVariable)                                |
+//+------------------------------------------------------------------+
+string GVKey(string varName)
+{
+   return "FlatRange_" + (string)TargetTicket + "_" + varName;
+}
+
+void SaveState()
+{
+   if(g_state < ST_RANGE_LOCKED || g_state > ST_TRAILING) return;
+
+   GlobalVariableSet(GVKey("state"),     (double)g_state);
+   GlobalVariableSet(GVKey("rangeHigh"), g_rangeHigh);
+   GlobalVariableSet(GVKey("rangeLow"),  g_rangeLow);
+   GlobalVariableSet(GVKey("rangeMid"),  g_rangeMid);
+   GlobalVariableSet(GVKey("trailPeak"), g_trailPeak);
+   GlobalVariableSet(GVKey("trailLine"), g_trailLine);
+   GlobalVariableSet(GVKey("waitBars"),  (double)g_waitBarsCount);
+   GlobalVariableSet(GVKey("barsEntry"), (double)g_barsFromEntry);
+   GlobalVariableSet(GVKey("barsFlat"),  (double)g_barsFromFlat);
+   GlobalVariableSet(GVKey("posType"),   (double)g_posType);
+}
+
+bool LoadState()
+{
+   if(!GlobalVariableCheck(GVKey("state"))) return false;
+
+   EA_STATE savedState = (EA_STATE)(int)GlobalVariableGet(GVKey("state"));
+   if(savedState < ST_RANGE_LOCKED || savedState > ST_TRAILING)
+   {
+      ClearSavedState();
+      return false;
+   }
+
+   double savedPosType = GlobalVariableGet(GVKey("posType"));
+   if((int)savedPosType != (int)g_posType)
+   {
+      Print("[CloseByFlatRangeEA] Saved posType mismatch, discarding");
+      ClearSavedState();
+      return false;
+   }
+
+   g_rangeHigh     = GlobalVariableGet(GVKey("rangeHigh"));
+   g_rangeLow      = GlobalVariableGet(GVKey("rangeLow"));
+   g_rangeMid      = GlobalVariableGet(GVKey("rangeMid"));
+   g_rangeLocked   = true;
+   g_trailPeak     = GlobalVariableGet(GVKey("trailPeak"));
+   g_trailLine     = GlobalVariableGet(GVKey("trailLine"));
+   g_waitBarsCount = (int)GlobalVariableGet(GVKey("waitBars"));
+   g_barsFromEntry = (int)GlobalVariableGet(GVKey("barsEntry"));
+   g_barsFromFlat  = (int)GlobalVariableGet(GVKey("barsFlat"));
+
+   g_state     = savedState;
+   g_stateInfo = "Restored";
+
+   Print("[CloseByFlatRangeEA] State restored: ", StateToString(savedState),
+         " Range=[", DoubleToString(g_rangeLow, _Digits),
+         "..", DoubleToString(g_rangeHigh, _Digits), "]",
+         " WaitBars=", g_waitBarsCount,
+         " TrailPeak=", DoubleToString(g_trailPeak, _Digits));
+
+   WriteEventLog("RESTORE", StateToString(savedState));
+   UpdatePanel();
+   return true;
+}
+
+void ClearSavedState()
+{
+   GlobalVariableDel(GVKey("state"));
+   GlobalVariableDel(GVKey("rangeHigh"));
+   GlobalVariableDel(GVKey("rangeLow"));
+   GlobalVariableDel(GVKey("rangeMid"));
+   GlobalVariableDel(GVKey("trailPeak"));
+   GlobalVariableDel(GVKey("trailLine"));
+   GlobalVariableDel(GVKey("waitBars"));
+   GlobalVariableDel(GVKey("barsEntry"));
+   GlobalVariableDel(GVKey("barsFlat"));
+   GlobalVariableDel(GVKey("posType"));
 }
 
 //+------------------------------------------------------------------+
@@ -704,6 +814,10 @@ int OnInit()
    // Cache entry info and write ATTACH event
    CacheEntryInfo();
    WriteEventLog("ATTACH");
+
+   // Try to restore saved state
+   if(LoadState())
+      return INIT_SUCCEEDED;
 
    SetState(ST_WAIT_FLAT);
    return INIT_SUCCEEDED;
@@ -851,6 +965,7 @@ void OnTick()
          return;
       }
 
+      SaveState();
       UpdatePanel();
       return;
    }
@@ -865,6 +980,7 @@ void OnTick()
                       + " Line=" + DoubleToString(g_trailLine, _Digits));
          return;
       }
+      SaveState();
       UpdatePanel();
    }
 }

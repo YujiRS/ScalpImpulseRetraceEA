@@ -3,7 +3,7 @@
 //| Closes a specific position on MA Flat + Range breakout + ATR trail|
 //+------------------------------------------------------------------+
 #property copyright "CloseByFlatRangeEA"
-#property version   "3.00"
+#property version   "3.01"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -249,11 +249,7 @@ bool IsNewBar()
 //+------------------------------------------------------------------+
 bool PositionExists()
 {
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      if(PositionGetTicket(i) == TargetTicket) return true;
-   }
-   return false;
+   return PositionSelectByTicket(TargetTicket);
 }
 
 //+------------------------------------------------------------------+
@@ -272,6 +268,7 @@ bool CheckPositionAlive()
    g_goneCount++;
    if(g_goneCount >= GONE_THRESHOLD)
    {
+      CaptureClosePrice();  // will be 0 if position already gone
       g_closeReason = "PositionGone";
       SetState(ST_CLOSED, "Position gone (" + (string)GONE_THRESHOLD + " consecutive checks)");
       return false;
@@ -449,6 +446,7 @@ void ExecuteClose(string reason)
 
    if(!PositionExists())
    {
+      CaptureClosePrice();  // will be 0 if position already gone
       SetState(ST_CLOSED, "Position gone before close: " + reason);
       return;
    }
@@ -481,6 +479,7 @@ void HandleCloseRetry()
       g_goneCount++;
       if(g_goneCount >= GONE_THRESHOLD)
       {
+         CaptureClosePrice();  // will be 0 if position already gone
          SetState(ST_CLOSED, "Position gone during close retry");
          return;
       }
@@ -682,16 +681,18 @@ void SaveState()
 {
    if(g_state < ST_RANGE_LOCKED || g_state > ST_TRAILING) return;
 
-   GlobalVariableSet(GVKey("state"),     (double)g_state);
-   GlobalVariableSet(GVKey("rangeHigh"), g_rangeHigh);
-   GlobalVariableSet(GVKey("rangeLow"),  g_rangeLow);
-   GlobalVariableSet(GVKey("rangeMid"),  g_rangeMid);
-   GlobalVariableSet(GVKey("trailPeak"), g_trailPeak);
-   GlobalVariableSet(GVKey("trailLine"), g_trailLine);
-   GlobalVariableSet(GVKey("waitBars"),  (double)g_waitBarsCount);
-   GlobalVariableSet(GVKey("barsEntry"), (double)g_barsFromEntry);
-   GlobalVariableSet(GVKey("barsFlat"),  (double)g_barsFromFlat);
-   GlobalVariableSet(GVKey("posType"),   (double)g_posType);
+   GlobalVariableSet(GVKey("state"),      (double)g_state);
+   GlobalVariableSet(GVKey("rangeHigh"),  g_rangeHigh);
+   GlobalVariableSet(GVKey("rangeLow"),   g_rangeLow);
+   GlobalVariableSet(GVKey("rangeMid"),   g_rangeMid);
+   GlobalVariableSet(GVKey("trailPeak"),  g_trailPeak);
+   GlobalVariableSet(GVKey("trailLine"),  g_trailLine);
+   GlobalVariableSet(GVKey("waitBars"),   (double)g_waitBarsCount);
+   GlobalVariableSet(GVKey("barsEntry"),  (double)g_barsFromEntry);
+   GlobalVariableSet(GVKey("barsFlat"),   (double)g_barsFromFlat);
+   GlobalVariableSet(GVKey("posType"),    (double)g_posType);
+   GlobalVariableSet(GVKey("entryPrice"), g_entryPrice);
+   GlobalVariableSet(GVKey("entryTime"),  (double)g_entryTime);
 }
 
 bool LoadState()
@@ -722,6 +723,8 @@ bool LoadState()
    g_waitBarsCount = (int)GlobalVariableGet(GVKey("waitBars"));
    g_barsFromEntry = (int)GlobalVariableGet(GVKey("barsEntry"));
    g_barsFromFlat  = (int)GlobalVariableGet(GVKey("barsFlat"));
+   g_entryPrice    = GlobalVariableGet(GVKey("entryPrice"));
+   g_entryTime     = (datetime)GlobalVariableGet(GVKey("entryTime"));
 
    g_state     = savedState;
    g_stateInfo = "Restored";
@@ -749,6 +752,8 @@ void ClearSavedState()
    GlobalVariableDel(GVKey("barsEntry"));
    GlobalVariableDel(GVKey("barsFlat"));
    GlobalVariableDel(GVKey("posType"));
+   GlobalVariableDel(GVKey("entryPrice"));
+   GlobalVariableDel(GVKey("entryTime"));
 }
 
 //+------------------------------------------------------------------+
@@ -758,8 +763,8 @@ int OnInit()
 
    if(TargetTicket == 0)
    {
-      SetState(ST_ERROR, "TargetTicket=0 is not allowed");
-      return INIT_SUCCEEDED;
+      Print("[CloseByFlatRangeEA] ERROR: TargetTicket=0 is not allowed");
+      return INIT_FAILED;
    }
 
    // Apply market mode preset
@@ -772,8 +777,8 @@ int OnInit()
 
    if(g_hMA == INVALID_HANDLE || g_hATR == INVALID_HANDLE)
    {
-      SetState(ST_ERROR, "Failed to create MA/ATR handles");
-      return INIT_SUCCEEDED;
+      Print("[CloseByFlatRangeEA] ERROR: Failed to create MA/ATR handles");
+      return INIT_FAILED;
    }
 
    // Init event log
@@ -811,14 +816,15 @@ int OnInit()
    g_trailPeak     = 0.0;
    g_trailLine     = 0.0;
 
-   // Cache entry info and write ATTACH event
+   // Cache entry info
    CacheEntryInfo();
-   WriteEventLog("ATTACH");
 
-   // Try to restore saved state
+   // Try to restore saved state (RESTORE event written inside LoadState)
    if(LoadState())
       return INIT_SUCCEEDED;
 
+   // Fresh start
+   WriteEventLog("ATTACH");
    SetState(ST_WAIT_FLAT);
    return INIT_SUCCEEDED;
 }
@@ -931,8 +937,14 @@ void OnTick()
       {
          // Favorable breakout -> initialize trailing and transition
          double highBuf[1], lowBuf[1];
-         CopyHigh(_Symbol, SignalTF, 1, 1, highBuf);
-         CopyLow(_Symbol, SignalTF, 1, 1, lowBuf);
+         if(CopyHigh(_Symbol, SignalTF, 1, 1, highBuf) < 1 ||
+            CopyLow(_Symbol, SignalTF, 1, 1, lowBuf) < 1)
+         {
+            Print("[CloseByFlatRangeEA] WARN: CopyHigh/Low failed on breakout init, deferring");
+            SaveState();
+            UpdatePanel();
+            return;
+         }
 
          if(g_posType == POSITION_TYPE_BUY)
             g_trailPeak = highBuf[0];
@@ -948,6 +960,10 @@ void OnTick()
             else
                g_trailLine = g_trailPeak + atrBuf[0] * TrailATRMult;
          }
+         else
+         {
+            Print("[CloseByFlatRangeEA] WARN: ATR unavailable on trail init, trailLine deferred");
+         }
 
          SetState(ST_TRAILING,
                   "FavBreakout Peak=" + DoubleToString(g_trailPeak, _Digits)
@@ -958,11 +974,14 @@ void OnTick()
       // 2. No breakout -- check WaitBars safety valve
       if(g_waitBarsCount > w_waitBarsAfterFlat)
       {
-         Print("[CloseByFlatRangeEA] WaitBars exceeded: ",
-               g_waitBarsCount, ">", w_waitBarsAfterFlat);
          if(FailSafe == FS_MARKET_CLOSE)
+         {
+            Print("[CloseByFlatRangeEA] WaitBars exceeded: ",
+                  g_waitBarsCount, ">", w_waitBarsAfterFlat);
             ExecuteClose("FailSafe: WaitBars exceeded");
-         return;
+            return;
+         }
+         // FS_NONE: continue monitoring breakout
       }
 
       SaveState();

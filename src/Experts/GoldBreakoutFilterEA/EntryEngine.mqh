@@ -1,12 +1,13 @@
 //+------------------------------------------------------------------+
 //| EntryEngine.mqh                                                   |
-//| Confirm判定・TrendFilter・ReversalGuard                            |
+//| GOLD専用: Confirm判定・TrendFilter・ReversalGuard                   |
+//| EMA Cross Filter・Impulse Exceed Filter                           |
 //+------------------------------------------------------------------+
 #ifndef __ENTRY_ENGINE_MQH__
 #define __ENTRY_ENGINE_MQH__
 
 //+------------------------------------------------------------------+
-//| Confirm判定（第7章）                                               |
+//| Confirm判定（GOLD: WickRejection OR MicroBreak）                   |
 //+------------------------------------------------------------------+
 
 // A) WickRejection（ヒゲ拒否）
@@ -20,28 +21,21 @@ bool CheckWickRejection()
    double fullRange = high1 - low1;
    if(fullRange <= 0) return false;
 
-   // アクティブ帯の取得
    double bandUpper, bandLower;
    GetActiveBand(bandUpper, bandLower);
 
    if(g_impulseDir == DIR_LONG)
    {
-      // 下ヒゲ比率 >= WickRatioMin
       double lowerWick = MathMin(open1, close1) - low1;
       double wickRatio = lowerWick / fullRange;
       if(wickRatio < g_profile.wickRatioMin) return false;
-
-      // 終値が押し帯の内側〜上側で確定
       if(close1 >= bandLower) return true;
    }
    else
    {
-      // 上ヒゲ比率 >= WickRatioMin
       double upperWick = high1 - MathMax(open1, close1);
       double wickRatio = upperWick / fullRange;
       if(wickRatio < g_profile.wickRatioMin) return false;
-
-      // 終値が押し帯の内側〜下側で確定
       if(close1 <= bandUpper) return true;
    }
 
@@ -63,7 +57,6 @@ bool CheckEngulfing()
 
    if(g_impulseDir == DIR_LONG)
    {
-      // Bullish Engulfing: 現足実体が前足実体を包む & 陽線
       if(close1 > open1 &&
          body1_upper > body2_upper &&
          body1_lower < body2_lower)
@@ -71,7 +64,6 @@ bool CheckEngulfing()
    }
    else
    {
-      // Bearish Engulfing: 現足実体が前足実体を包む & 陰線
       if(close1 < open1 &&
          body1_upper > body2_upper &&
          body1_lower < body2_lower)
@@ -81,65 +73,30 @@ bool CheckEngulfing()
    return false;
 }
 
-// C) MicroBreak（ミクロ構造ブレイク）
+// C) MicroBreak（フラクタル型）
 bool CheckMicroBreak()
 {
    double close1 = iClose(Symbol(), PERIOD_M1, 1);
 
-   switch(g_resolvedMarketMode)
+   UpdateFractalMicroLevels();
+
+   if(g_impulseDir == DIR_LONG)
    {
-      case MARKET_MODE_FX:
-      case MARKET_MODE_GOLD:
-      {
-         // フラクタル固定型（左右2本）
-         UpdateFractalMicroLevels();
-
-         if(g_impulseDir == DIR_LONG)
-         {
-            if(g_microHighValid && close1 > g_microHigh)
-               return true;
-         }
-         else
-         {
-            if(g_microLowValid && close1 < g_microLow)
-               return true;
-         }
-         break;
-      }
-      case MARKET_MODE_CRYPTO:
-      {
-         // スイング抽出型（LookbackMicroBars=3固定）
-         double microHigh = 0, microLow = 999999;
-         for(int i = 1; i <= g_profile.lookbackMicroBars; i++)
-         {
-            double h = iHigh(Symbol(), PERIOD_M1, i);
-            double l = iLow(Symbol(), PERIOD_M1, i);
-            if(h > microHigh) microHigh = h;
-            if(l < microLow)  microLow = l;
-         }
-
-         if(g_impulseDir == DIR_LONG)
-         {
-            if(close1 > microHigh) return true;
-         }
-         else
-         {
-            if(close1 < microLow) return true;
-         }
-         break;
-      }
+      if(g_microHighValid && close1 > g_microHigh)
+         return true;
+   }
+   else
+   {
+      if(g_microLowValid && close1 < g_microLow)
+         return true;
    }
 
    return false;
 }
 
-// フラクタルMicroHigh/MicroLow更新（FX/GOLD用）
+// フラクタルMicroHigh/MicroLow更新
 void UpdateFractalMicroLevels()
 {
-   // 左右2本型フラクタル: 確定足[3]を中心に[4],[5]と[2],[1]を比較
-   // i=3 が最直近の確定候補（[1],[2]が右側、[4],[5]が左側）
-
-   // MicroHighチェック（shift=3を中心）
    for(int i = 3; i < 20; i++)
    {
       double h_i   = iHigh(Symbol(), PERIOD_M1, i);
@@ -156,7 +113,6 @@ void UpdateFractalMicroLevels()
       }
    }
 
-   // MicroLowチェック
    for(int i = 3; i < 20; i++)
    {
       double l_i   = iLow(Symbol(), PERIOD_M1, i);
@@ -174,46 +130,22 @@ void UpdateFractalMicroLevels()
    }
 }
 
-// 市場別Confirm判定（第7.3章）
+// GOLD Confirm判定: WickRejection OR MicroBreak
 ENUM_CONFIRM_TYPE EvaluateConfirm()
 {
-   switch(g_resolvedMarketMode)
+   if(CheckWickRejection())
    {
-      case MARKET_MODE_FX:
-      {
-         // FX: Engulfing OR MicroBreak（Engulfing優先）
-         if(CheckEngulfing())    return CONFIRM_ENGULFING;
-         if(CheckMicroBreak())   return CONFIRM_MICRO_BREAK;
-         break;
-      }
-      case MARKET_MODE_GOLD:
-      {
-         // GOLD: WickRejection OR MicroBreak (CHANGE-007: AND→OR)
-         // WickRejection を引き続きトラッキング（ログ用）
-         if(CheckWickRejection())
-         {
-            g_wickRejectionSeen = true;
-            return CONFIRM_WICK_REJECTION;   // WickRejectのみで許可
-         }
-         if(CheckMicroBreak())
-         {
-            return CONFIRM_MICRO_BREAK;      // MicroBreakのみで許可
-         }
-         break;
-      }
-      case MARKET_MODE_CRYPTO:
-      {
-         // CRYPTO: MicroBreakのみ
-         if(CheckMicroBreak()) return CONFIRM_MICRO_BREAK;
-         break;
-      }
+      g_wickRejectionSeen = true;
+      return CONFIRM_WICK_REJECTION;
    }
+   if(CheckMicroBreak())
+      return CONFIRM_MICRO_BREAK;
 
    return CONFIRM_NONE;
 }
 
 //+------------------------------------------------------------------+
-//| TrendFilter / ReversalGuard                                       |
+//| TrendFilter / ReversalGuard (GOLD専用)                            |
 //+------------------------------------------------------------------+
 
 string TrendDirFromSlope(double slope, double slopeMin)
@@ -289,7 +221,7 @@ bool EvaluateTrendFilterAndGuard(string &rejectStageOut)
 
    g_stats.TrendFilterEnable = TrendFilter_Enable ? 1 : 0;
    g_stats.TrendTF           = "M15";
-   g_stats.TrendMethod       = "";
+   g_stats.TrendMethod       = "EMA50_SLOPE";
    g_stats.TrendDir          = "";
    g_stats.TrendSlope        = 0.0;
    g_stats.TrendSlopeMin     = 0.0;
@@ -321,60 +253,22 @@ bool EvaluateTrendFilterAndGuard(string &rejectStageOut)
    }
 
    double slope    = ema50_1 - ema50_2;
-   double slopeMin = 0.0;
+   double slopeMin = atr15 * TrendSlopeMult_GOLD;
+
+   g_stats.TrendSlope       = slope;
+   g_stats.TrendSlopeMin    = slopeMin;
+   g_stats.TrendSlopeSet    = true;
+
+   // GOLD ATR Floor: ATR(M15)がFloor未満→FLAT扱い
+   double atrPts = (atr15 / _Point);
+   g_stats.TrendATRFloor    = TrendATRFloorPts_GOLD;
+   g_stats.TrendATRFloorSet = true;
+
    string trendDir = "FLAT";
-
-   if(g_resolvedMarketMode == MARKET_MODE_CRYPTO)
-   {
-      double ema21_1 = GetMAValue(sym, PERIOD_M15, 21, MODE_EMA, PRICE_CLOSE, 1);
-      if(ema21_1 == EMPTY_VALUE)
-      {
-         g_stats.TrendDir = "FLAT";
-         g_stats.TrendAligned = 0;
-         rejectStageOut = "TREND_FLAT";
-         return false;
-      }
-
-      g_stats.TrendMethod = "EMA21x50_SLOPE";
-      slopeMin = atr15 * TrendSlopeMult_CRYPTO;
-
-      g_stats.TrendSlope       = slope;
-      g_stats.TrendSlopeMin    = slopeMin;
-      g_stats.TrendSlopeSet    = true;
-
-      if(ema21_1 > ema50_1 && slope >= slopeMin)       trendDir = "LONG";
-      else if(ema21_1 < ema50_1 && slope <= -slopeMin) trendDir = "SHORT";
-      else                                             trendDir = "FLAT";
-   }
-   else if(g_resolvedMarketMode == MARKET_MODE_GOLD)
-   {
-      g_stats.TrendMethod = "EMA50_SLOPE";
-      slopeMin = atr15 * TrendSlopeMult_GOLD;
-
-      g_stats.TrendSlope       = slope;
-      g_stats.TrendSlopeMin    = slopeMin;
-      g_stats.TrendSlopeSet    = true;
-
-      double atrPts = (atr15 / _Point);
-      g_stats.TrendATRFloor    = TrendATRFloorPts_GOLD;
-      g_stats.TrendATRFloorSet = true;
-
-      if(atrPts < TrendATRFloorPts_GOLD)
-         trendDir = "FLAT";
-      else
-         trendDir = TrendDirFromSlope(slope, slopeMin);
-   }
+   if(atrPts < TrendATRFloorPts_GOLD)
+      trendDir = "FLAT";
    else
-   {
-      g_stats.TrendMethod = "EMA50_SLOPE";
-      slopeMin = atr15 * TrendSlopeMult_FX;
-
-      g_stats.TrendSlope       = slope;
-      g_stats.TrendSlopeMin    = slopeMin;
-      g_stats.TrendSlopeSet    = true;
-
       trendDir = TrendDirFromSlope(slope, slopeMin);
-   }
 
    g_stats.TrendDir = trendDir;
 
@@ -394,8 +288,8 @@ bool EvaluateTrendFilterAndGuard(string &rejectStageOut)
       return false;
    }
 
-   // ── EMA Cross Filter (EMA20 vs EMA50 position) ── GOLD only
-   if(g_resolvedMarketMode == MARKET_MODE_GOLD && EMACrossFilter_Enable_GOLD)
+   // ── EMA Cross Filter (EMA20 vs EMA50 position) ──
+   if(EMACrossFilter_Enable_GOLD)
    {
       g_stats.EMACrossFilterEnable = 1;
 
@@ -432,6 +326,7 @@ bool EvaluateTrendFilterAndGuard(string &rejectStageOut)
       g_stats.EMACrossFilterEnable = 0;
    }
 
+   // ReversalGuard
    if(!ReversalGuard_Enable)
    {
       g_stats.ReversalGuardTriggered = 0;
@@ -450,13 +345,9 @@ bool EvaluateTrendFilterAndGuard(string &rejectStageOut)
       return true;
    }
 
-   double body= MathAbs(c1 - o1);
+   double body = MathAbs(c1 - o1);
 
-   double bigBodyMult = ReversalBigBodyMult_FX;
-   if(g_resolvedMarketMode == MARKET_MODE_GOLD)   bigBodyMult = ReversalBigBodyMult_GOLD;
-   if(g_resolvedMarketMode == MARKET_MODE_CRYPTO) bigBodyMult = ReversalBigBodyMult_CRYPTO;
-
-   bool oppositeBigBody = (body >= (atr1 * bigBodyMult)) &&
+   bool oppositeBigBody = (body >= (atr1 * ReversalBigBodyMult_GOLD)) &&
                           ((impulseLong && (c1 < o1)) || (!impulseLong && (c1 > o1)));
 
    if(oppositeBigBody)
@@ -479,7 +370,7 @@ bool EvaluateTrendFilterAndGuard(string &rejectStageOut)
       }
    }
 
-   if(g_resolvedMarketMode == MARKET_MODE_GOLD && ReversalWickReject_Enable_GOLD)
+   if(ReversalWickReject_Enable_GOLD)
    {
       if(WickRejectOpposite_GOLD(impulseLong))
       {
@@ -496,12 +387,10 @@ bool EvaluateTrendFilterAndGuard(string &rejectStageOut)
 
 //+------------------------------------------------------------------+
 //| Impulse Exceed Filter (overextension guard)                      |
-//| Impulse range が ATR(M15) × 閾値 を超えたらリジェクト             |
 //+------------------------------------------------------------------+
 bool EvaluateImpulseExceedFilter(string &rejectStageOut)
 {
-   // GOLD only (他市場は将来拡張用にスキップ)
-   if(g_resolvedMarketMode != MARKET_MODE_GOLD || !ImpulseExceed_Enable_GOLD)
+   if(!ImpulseExceed_Enable_GOLD)
    {
       g_stats.ImpulseExceedEnable = 0;
       return true;
@@ -516,7 +405,7 @@ bool EvaluateImpulseExceedFilter(string &rejectStageOut)
    if(atr15 == EMPTY_VALUE || atr15 <= 0)
    {
       g_stats.ImpulseExceedTriggered = 0;
-      return true;  // データ不足時はパス
+      return true;
    }
 
    double impulseRange = MathAbs(g_impulseEnd - g_impulseStart);

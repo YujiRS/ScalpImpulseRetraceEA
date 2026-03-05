@@ -85,73 +85,30 @@ void CalculateBands()
       bw = maxBw;
 
    g_effectiveBandWidthPts = bw;
-   // PrimaryBand
-   switch(g_resolvedMarketMode)
+   // GOLD PrimaryBand + DeepBand
+   g_primaryBandUpper = g_fib500 + bw;
+   g_primaryBandLower = g_fib500 - bw;
+
+   if(g_goldDeepBandON)
    {
-      case MARKET_MODE_FX:
+      if(g_impulseDir == DIR_LONG)
       {
-         g_primaryBandUpper = g_fib500 + bw;
-         g_primaryBandLower = g_fib500 - bw;
-
-         if(g_profile.optionalBand38)
-         {
-            g_optBand38Upper = g_fib382 + bw;
-            g_optBand38Lower = g_fib382 - bw;
-         }
-         g_deepBandUpper = 0;
-         g_deepBandLower = 0;
-         break;
+         g_deepBandUpper = g_fib500 + bw;
+         g_deepBandLower = g_fib618 - bw;
       }
-      case MARKET_MODE_GOLD:
+      else
       {
-         g_primaryBandUpper = g_fib500 + bw;
-         g_primaryBandLower = g_fib500 - bw;
-
-         if(g_goldDeepBandON)
-         {
-            if(g_impulseDir == DIR_LONG)
-            {
-               g_deepBandUpper = g_fib500 + bw;
-               g_deepBandLower = g_fib618 - bw;
-            }
-            else
-            {
-               g_deepBandLower = g_fib500 - bw;
-               g_deepBandUpper = g_fib618 + bw;
-            }
-         }
-         else
-         {
-            g_deepBandUpper = 0;
-            g_deepBandLower = 0;
-         }
-         g_optBand38Upper = 0;
-         g_optBand38Lower = 0;
-         break;
-      }
-      case MARKET_MODE_CRYPTO:
-      {
-         if(g_impulseDir == DIR_LONG)
-         {
-            g_primaryBandUpper = g_fib500 + bw;
-            g_primaryBandLower = g_fib618 - bw;
-         }
-         else
-         {
-            g_primaryBandLower = g_fib500 - bw;
-            g_primaryBandUpper = g_fib618 + bw;
-         }
-
-         if(g_profile.optionalBand38)
-         {
-            g_optBand38Upper = g_fib382 + bw;
-            g_optBand38Lower = g_fib382 - bw;
-         }
-         g_deepBandUpper = 0;
-         g_deepBandLower = 0;
-         break;
+         g_deepBandLower = g_fib500 - bw;
+         g_deepBandUpper = g_fib618 + bw;
       }
    }
+   else
+   {
+      g_deepBandUpper = 0;
+      g_deepBandLower = 0;
+   }
+   g_optBand38Upper = 0;
+   g_optBand38Lower = 0;
 
    // Fib(0-100) 範囲外にBandが飛び出さないようクランプ
    if(g_primaryBandUpper != 0 || g_primaryBandLower != 0)

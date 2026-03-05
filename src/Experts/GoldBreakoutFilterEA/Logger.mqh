@@ -125,7 +125,7 @@ void DumpImpulseSummary()
    FileWrite(handle,
       TimeToString(g_stats.StartTime, TIME_DATE|TIME_SECONDS),
       Symbol(),
-      MarketModeToString(g_resolvedMarketMode),
+      "GOLD",
       g_stats.TradeUUID,
 
       g_stats.RangePts,
@@ -253,7 +253,7 @@ void WriteLog(ENUM_LOG_EVENT event,
 
    string line = TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS) + "\t" +
                  Symbol() + "\t" +
-                 MarketModeToString(g_resolvedMarketMode) + "\t" +
+                 "GOLD" + "\t" +
                  StateToString(g_currentState) + "\t" +
                  g_tradeUUID + "\t" +
                  LogEventToString(event) + "\t" +
@@ -303,40 +303,14 @@ string GenerateTradeUUID()
 // MA期間の初期化（MarketProfile内部定義・SMA固定）
 void InitMAPeriods()
 {
-   switch(g_resolvedMarketMode)
-   {
-      case MARKET_MODE_FX:
-      case MARKET_MODE_GOLD:
-         g_maPeriodsCount = 5;
-         ArrayResize(g_maPeriods, 5);
-         g_maPeriods[0] = 5;
-         g_maPeriods[1] = 13;
-         g_maPeriods[2] = 21;
-         g_maPeriods[3] = 100;
-         g_maPeriods[4] = 200;
-         break;
-
-      case MARKET_MODE_CRYPTO:
-         g_maPeriodsCount = 6;
-         ArrayResize(g_maPeriods, 6);
-         g_maPeriods[0] = 5;
-         g_maPeriods[1] = 13;
-         g_maPeriods[2] = 21;
-         g_maPeriods[3] = 100;
-         g_maPeriods[4] = 200;
-         g_maPeriods[5] = 365;
-         break;
-
-      default:
-         g_maPeriodsCount = 5;
-         ArrayResize(g_maPeriods, 5);
-         g_maPeriods[0] = 5;
-         g_maPeriods[1] = 13;
-         g_maPeriods[2] = 21;
-         g_maPeriods[3] = 100;
-         g_maPeriods[4] = 200;
-         break;
-   }
+   // GOLD: {5, 13, 21, 100, 200}
+   g_maPeriodsCount = 5;
+   ArrayResize(g_maPeriods, 5);
+   g_maPeriods[0] = 5;
+   g_maPeriods[1] = 13;
+   g_maPeriods[2] = 21;
+   g_maPeriods[3] = 100;
+   g_maPeriods[4] = 200;
 }
 
 // SMA値取得ヘルパー（shift=1: 確定足）
@@ -370,8 +344,7 @@ void EvaluateMAConfluence()
    double bandUpper = g_primaryBandUpper;
    double bandLower = g_primaryBandLower;
    // GOLD DeepBandがONの場合はDeepBandを使用
-   if(g_resolvedMarketMode == MARKET_MODE_GOLD && g_goldDeepBandON &&
-      g_deepBandUpper > 0 && g_deepBandLower > 0)
+   if(g_goldDeepBandON && g_deepBandUpper > 0 && g_deepBandLower > 0)
    {
       bandUpper = g_deepBandUpper;
       bandLower = g_deepBandLower;

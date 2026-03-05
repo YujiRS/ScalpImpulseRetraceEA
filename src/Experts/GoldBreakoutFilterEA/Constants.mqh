@@ -1,6 +1,7 @@
 //+------------------------------------------------------------------+
 //| Constants.mqh                                                    |
-//| 定数定義・Enum・構造体・ToString変換・ATR/MAヘルパー                  |
+//| GoldBreakoutFilterEA 定数定義・Enum・構造体・ToString変換・ATRヘルパー |
+//| GOLD専用                                                          |
 //+------------------------------------------------------------------+
 #ifndef __CONSTANTS_MQH__
 #define __CONSTANTS_MQH__
@@ -12,19 +13,10 @@
 #define EA_VERSION        "v2.0"
 
 //+------------------------------------------------------------------+
-//| Enum定義（第1章・第3章・第12章）                                    |
+//| Enum定義                                                          |
 //+------------------------------------------------------------------+
 
-// 第1章: MarketMode
-enum ENUM_MARKET_MODE
-{
-   MARKET_MODE_AUTO   = 0, // AUTO
-   MARKET_MODE_FX     = 1, // FX
-   MARKET_MODE_GOLD   = 2, // GOLD
-   MARKET_MODE_CRYPTO = 3  // CRYPTO
-};
-
-// 第3章: StateID定義（固定・変更禁止）
+// StateID定義（固定・変更禁止）
 enum ENUM_EA_STATE
 {
    STATE_IDLE                    = 0, // IDLE
@@ -69,7 +61,7 @@ enum ENUM_DIRECTION
    DIR_SHORT = 2  // SHORT
 };
 
-// Confirm種別
+// Confirm種別（GOLD: WickRejection / Engulfing / MicroBreak）
 enum ENUM_CONFIRM_TYPE
 {
    CONFIRM_NONE           = 0, // NONE
@@ -86,7 +78,7 @@ enum ENUM_ENTRY_TYPE
    ENTRY_MARKET = 2  // MARKET
 };
 
-// ログイベント分類（第13章）
+// ログイベント分類
 enum ENUM_LOG_EVENT
 {
    LOG_STATE     = 0, // LOG_STATE
@@ -100,62 +92,53 @@ enum ENUM_LOG_EVENT
 };
 
 //+------------------------------------------------------------------+
-//| MarketProfile構造体（第1章・第10章）                                 |
-//| 市場別パラメータセット（Input変更不可・内部定義のみ）                   |
+//| MarketProfile構造体（GOLD専用）                                     |
 //+------------------------------------------------------------------+
 struct MarketProfileData
 {
-   ENUM_MARKET_MODE  marketMode;
-
-   // 第4章: Impulse確定パラメータ
+   // Impulse確定パラメータ
    double            impulseATRMult;
    int               impulseMinBars;
    double            smallBodyRatio;
    int               freezeCancelWindowBars;
 
-   // 第5章: 押し帯パラメータ
-   // BandWidthPtsはFIB_ACTIVE遷移時に算出（本構造体には格納しない）
-   bool              deepBandEnabled;         // GOLD用: 動的判定結果
-   bool              cryptoDeepBandAlwaysOn;  // CRYPTO: 常時ON
-   bool              optionalBand38;          // 38.2帯有効化
+   // 押し帯パラメータ
+   bool              deepBandEnabled;         // 動的判定結果
 
-   // 第5章: タッチ/離脱パラメータ
-   double            leaveDistanceMult;       // LeaveDistance = BandWidthPts × この値
+   // タッチ/離脱パラメータ
+   double            leaveDistanceMult;
    int               leaveMinBars;
    int               retouchTimeLimitBars;
    int               resetMinBars;
 
-   // 第7章: Confirm
+   // Confirm
    int               confirmTimeLimitBars;
 
-   // 第8章: Execution
+   // Execution
    double            maxSlippagePts;
    double            maxFillDeviationPts;
 
-   // 第9章: Risk
+   // Risk
    int               timeExitBars;
 
-   // 第10章: スプレッド
+   // スプレッド
    double            spreadMult;
 
-   // 第6章: GOLD DeepBand条件パラメータ
+   // DeepBand条件パラメータ
    double            volExpansionRatio;
    double            overextensionMult;
 
-   // 第7章: GOLD WickRatioMin
+   // WickRatioMin
    double            wickRatioMin;
 
-   // CRYPTO: MicroBreak LookbackBars
-   int               lookbackMicroBars;
-
-   // === EntryGate: 市場別RR/RangeCost/SL倍率 ===
-   double            slATRMult;               // SL = ImpulseStart ± ATR × this
-   double            minRR_EntryGate;         // 最低リスクリワード
-   double            minRangeCostMult;        // 最低コスト倍率
-   double            tpExtensionRatio;        // TP = ImpulseEnd ± Range × this (CHANGE-006)
+   // EntryGate
+   double            slATRMult;
+   double            minRR_EntryGate;
+   double            minRangeCostMult;
+   double            tpExtensionRatio;
 };
 
-// === ANALYZE追加 === ImpulseSummary構造体
+// ImpulseSummary構造体
 struct ImpulseStats
 {
    datetime   StartTime;
@@ -186,7 +169,7 @@ struct ImpulseStats
    string     FinalState;
    string     RejectStage;
 
-   // === STRUCTURE_BREAK 詳細 ===
+   // STRUCTURE_BREAK 詳細
    string     StructBreakReason;
    int        StructBreakPriority;
    string     StructBreakRefLevel;
@@ -195,13 +178,11 @@ struct ImpulseStats
    double     StructBreakDistPts;
    int        StructBreakBarShift;
    string     StructBreakSide;
+   string     StructBreakAtKind;
+   int        StructBreakWickCross;
+   double     StructBreakWickDistPts;
 
-   // === [ADD] 追加深掘り：At種別 + Wick跨ぎ ===
-   string     StructBreakAtKind;      // "CLOSE" / "HIGH" / "LOW"
-   int        StructBreakWickCross;   // 0/1
-   double     StructBreakWickDistPts; // (WickPrice-RefPrice)/_Point signed
-
-   // === MA Confluence ===
+   // MA Confluence
    int        MA_ConfluenceCount;
    string     MA_InBand_List;
    string     MA_InBand_FibPct;
@@ -214,137 +195,72 @@ struct ImpulseStats
    double     MA_Eval_Price;
    bool       MA_Evaluated;
 
-   // === TrendFilter / ReversalGuard ===
-   int        TrendFilterEnable;       // 1/0, 未評価は-1
-   string     TrendTF;                // 例: "M15"
-   string     TrendMethod;            // 例: "EMA50_SLOPE" / "EMA21x50_SLOPE"
-   string     TrendDir;               // "LONG" / "SHORT" / "FLAT"
+   // TrendFilter / ReversalGuard
+   int        TrendFilterEnable;
+   string     TrendTF;
+   string     TrendMethod;
+   string     TrendDir;
    double     TrendSlope;
    double     TrendSlopeMin;
    bool       TrendSlopeSet;
    double     TrendATRFloor;
    bool       TrendATRFloorSet;
-   int        TrendAligned;           // 1/0, 未評価は-1
+   int        TrendAligned;
 
-   int        ReversalGuardEnable;     // 1/0, 未評価は-1
-   string     ReversalTF;             // 例: "H1"
-   int        ReversalGuardTriggered; // 1/0, 未評価は-1
+   int        ReversalGuardEnable;
+   string     ReversalTF;
+   int        ReversalGuardTriggered;
    string     ReversalReason;
 
-   // === EMA Cross Filter ===
-   int        EMACrossFilterEnable;   // 1/0, 未評価は-1
-   double     EMACrossFastVal;        // EMA(Fast) value at evaluation
-   double     EMACrossSlowVal;        // EMA(50) value at evaluation
-   string     EMACrossDir;            // "LONG" / "SHORT" / "FLAT"
-   int        EMACrossAligned;        // 1/0, 未評価は-1
+   // EMA Cross Filter
+   int        EMACrossFilterEnable;
+   double     EMACrossFastVal;
+   double     EMACrossSlowVal;
+   string     EMACrossDir;
+   int        EMACrossAligned;
 
-   // === Impulse Exceed Filter ===
-   int        ImpulseExceedEnable;    // 1/0, 未評価は-1
-   double     ImpulseRangeATR;        // ImpulseRange / ATR(M15) ratio
-   double     ImpulseExceedMax;       // Max threshold
-   int        ImpulseExceedTriggered; // 1/0, 未評価は-1
+   // Impulse Exceed Filter
+   int        ImpulseExceedEnable;
+   double     ImpulseRangeATR;
+   double     ImpulseExceedMax;
+   int        ImpulseExceedTriggered;
 
    void Reset()
    {
       StartTime = TimeCurrent();
       TradeUUID = "";
-
-      RangePts = 0;
-      BandWidthPts = 0;
-      LeaveDistancePts = 0;
-      SpreadBasePts = 0;
-
+      RangePts = 0; BandWidthPts = 0; LeaveDistancePts = 0; SpreadBasePts = 0;
       FreezeCancelCount = 0;
-
-      Touch1Count = 0;
-      LeaveCount = 0;
-      Touch2Count = 0;
-      ConfirmCount = 0;
-
-      RiskGatePass = false;
-      Touch2Reached = false;
-      ConfirmReached = false;
-      EntryGatePass = false;
-
-      RR_Actual = 0;
-      RR_Min = 0;
-      RangeCostMult_Actual = 0;
-      RangeCostMult_Min = 0;
-
-      FinalState = "";
-      RejectStage = "NONE";
-
-      StructBreakReason = "";
-      StructBreakPriority = 0;
-      StructBreakRefLevel = "";
-      StructBreakRefPrice = 0;
-      StructBreakAtPrice = 0;
-      StructBreakDistPts = 0;
-      StructBreakBarShift = 0;
-      StructBreakSide = "";
-
-      StructBreakAtKind = "";
-      StructBreakWickCross = 0;
-      StructBreakWickDistPts = 0;
-
-      MA_ConfluenceCount = 0;
-      MA_InBand_List = "";
-      MA_InBand_FibPct = "";
-      MA_TightHitCount = 0;
-      MA_TightHit_List = "";
-      MA_NearBand_List = "";
-      MA_NearestDistance = 0;
-      MA_DirectionAligned = -1;
-      MA_Values = "";
-      MA_Eval_Price = 0;
-      MA_Evaluated = false;
-
-      TrendFilterEnable = -1;
-      TrendTF = "";
-      TrendMethod = "";
-      TrendDir = "";
-      TrendSlope = 0;
-      TrendSlopeMin = 0;
-      TrendSlopeSet = false;
-      TrendATRFloor = 0;
-      TrendATRFloorSet = false;
-      TrendAligned = -1;
-
-      ReversalGuardEnable = -1;
-      ReversalTF = "";
-      ReversalGuardTriggered = -1;
-      ReversalReason = "";
-
-      EMACrossFilterEnable = -1;
-      EMACrossFastVal = 0;
-      EMACrossSlowVal = 0;
-      EMACrossDir = "";
-      EMACrossAligned = -1;
-
-      ImpulseExceedEnable = -1;
-      ImpulseRangeATR = 0;
-      ImpulseExceedMax = 0;
-      ImpulseExceedTriggered = -1;
+      Touch1Count = 0; LeaveCount = 0; Touch2Count = 0; ConfirmCount = 0;
+      RiskGatePass = false; Touch2Reached = false; ConfirmReached = false; EntryGatePass = false;
+      RR_Actual = 0; RR_Min = 0; RangeCostMult_Actual = 0; RangeCostMult_Min = 0;
+      FinalState = ""; RejectStage = "NONE";
+      StructBreakReason = ""; StructBreakPriority = 0; StructBreakRefLevel = "";
+      StructBreakRefPrice = 0; StructBreakAtPrice = 0; StructBreakDistPts = 0;
+      StructBreakBarShift = 0; StructBreakSide = "";
+      StructBreakAtKind = ""; StructBreakWickCross = 0; StructBreakWickDistPts = 0;
+      MA_ConfluenceCount = 0; MA_InBand_List = ""; MA_InBand_FibPct = "";
+      MA_TightHitCount = 0; MA_TightHit_List = ""; MA_NearBand_List = "";
+      MA_NearestDistance = 0; MA_DirectionAligned = -1; MA_Values = "";
+      MA_Eval_Price = 0; MA_Evaluated = false;
+      TrendFilterEnable = -1; TrendTF = ""; TrendMethod = ""; TrendDir = "";
+      TrendSlope = 0; TrendSlopeMin = 0; TrendSlopeSet = false;
+      TrendATRFloor = 0; TrendATRFloorSet = false; TrendAligned = -1;
+      ReversalGuardEnable = -1; ReversalTF = "";
+      ReversalGuardTriggered = -1; ReversalReason = "";
+      EMACrossFilterEnable = -1; EMACrossFastVal = 0; EMACrossSlowVal = 0;
+      EMACrossDir = ""; EMACrossAligned = -1;
+      ImpulseExceedEnable = -1; ImpulseRangeATR = 0;
+      ImpulseExceedMax = 0; ImpulseExceedTriggered = -1;
    }
 };
 
-// === 13.9.6 MA Confluence ===
+// MA Confluence
 #define MA_MAX_PERIODS 6
 
 //+------------------------------------------------------------------+
 //| ToString変換関数                                                   |
 //+------------------------------------------------------------------+
-string MarketModeToString(ENUM_MARKET_MODE mode)
-{
-   switch(mode)
-   {
-      case MARKET_MODE_FX:     return "FX";
-      case MARKET_MODE_GOLD:   return "GOLD";
-      case MARKET_MODE_CRYPTO: return "CRYPTO";
-      default:                 return "FX";
-   }
-}
-
 string StateToString(ENUM_EA_STATE state)
 {
    switch(state)
@@ -424,7 +340,7 @@ double GetATR_M1(int shift)
    return buf[0];
 }
 
-// 長期ATR（第6章: VolExpansionRatio用）
+// 長期ATR（DeepBand VolExpansionRatio用）
 double GetATR_M1_Long(int shift, int period = 50)
 {
    int handle = iATR(Symbol(), PERIOD_M1, period);

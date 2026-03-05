@@ -1,8 +1,7 @@
 //+------------------------------------------------------------------+
 //| GoldBreakoutFilterEA.mq5                                         |
 //| GoldBreakoutFilterEA v2.0                                        |
-//| EMA Cross Filter + Impulse Exceed Filter (GOLD特化)              |
-//| Based on ScalpImpulseRetraceEA v1.6                              |
+//| GOLD専用: Impulse検出＋EMA/Exceedフィルター                        |
 //+------------------------------------------------------------------+
 #property copyright "GoldBreakoutFilterEA"
 #property link      ""
@@ -18,16 +17,16 @@
 #include "GoldBreakoutFilterEA/Constants.mqh"
 
 //+------------------------------------------------------------------+
-//| Inputs（第12章：グルーピングと初期値）                               |
+//| Inputs                                                            |
 //+------------------------------------------------------------------+
 
 // 【G1：運用（普段触る）】
 input bool              EnableTrading          = true;           // EnableTrading(false=ロジック稼働・Entry禁止)
-input ENUM_MARKET_MODE  MarketMode             = MARKET_MODE_AUTO; // MarketMode
 input bool              UseLimitEntry          = true;           // UseLimitEntry
 input bool              UseMarketFallback      = true;           // UseMarketFallback
 input ENUM_LOT_MODE     LotMode                = LOT_MODE_FIXED; // LotMode
 input double            FixedLot               = 0.01;           // FixedLot
+input double            RiskPercent            = 1.0;            // RiskPercent (口座残高の%)
 input ENUM_LOG_LEVEL    LogLevel               = LOG_LEVEL_NORMAL; // LogLevel
 input int               RunId                  = 1;              // RunId
 
@@ -43,55 +42,40 @@ input int               ExitMAFastPeriod       = 13;             // Exit EMA Fas
 input int               ExitMASlowPeriod       = 21;             // Exit EMA Slow Period
 input int               ExitConfirmBars        = 1;              // Exit Confirm Bars (1本確認)
 
-// === TrendFilter / ReversalGuard (順張り方向フィルタ) ===
+// === TrendFilter / ReversalGuard ===
 input bool   TrendFilter_Enable          = true;
-input double TrendSlopeMult_FX           = 0.05;   // FX ATR(M15)*mult
 input double TrendSlopeMult_GOLD         = 0.07;   // GOLD ATR(M15)*mult
 input double TrendATRFloorPts_GOLD       = 80.0;   // GOLD ATR(M15) in points floor
-input double TrendSlopeMult_CRYPTO       = 0.04;   // CRYPTO ATR(M15)*mult
 
 input bool   ReversalGuard_Enable        = true;
 input bool   ReversalEngulfing_Enable    = true;
-input double ReversalBigBodyMult_FX      = 0.9;    // FX ATR(H1)*mult
 input double ReversalBigBodyMult_GOLD    = 1.0;    // GOLD ATR(H1)*mult
-input double ReversalBigBodyMult_CRYPTO  = 0.9;    // CRYPTO ATR(H1)*mult
 input bool   ReversalWickReject_Enable_GOLD = true;
 input double ReversalWickRatioMin_GOLD   = 0.60;
 
 // === EMA Cross Filter (EMA20 vs EMA50 position) ===
-input bool   EMACrossFilter_Enable_GOLD    = true;    // GOLD: EMA20>EMA50=LONG, EMA20<EMA50=SHORT
-input int    EMACrossFilter_FastPeriod_GOLD = 20;     // GOLD: EMA Fast period for cross filter
+input bool   EMACrossFilter_Enable_GOLD    = true;    // EMA20>EMA50=LONG, EMA20<EMA50=SHORT
+input int    EMACrossFilter_FastPeriod_GOLD = 20;     // EMA Fast period for cross filter
 // === Impulse Exceed Filter (overextension guard) ===
-input bool   ImpulseExceed_Enable_GOLD     = true;    // GOLD: Reject if impulse > MaxExceedATR × ATR(M15)
-input double ImpulseExceed_MaxATR_GOLD     = 3.0;     // GOLD: Max impulse range in ATR(M15) units
+input bool   ImpulseExceed_Enable_GOLD     = true;    // Reject if impulse > MaxExceedATR × ATR(M15)
+input double ImpulseExceed_MaxATR_GOLD     = 3.0;     // Max impulse range in ATR(M15) units
 
 input bool              EnableFibVisualization = true;           // EnableFibVisualization
 
 // 【G2：安全弁（事故防止）】
 input ENUM_SPREAD_MODE  MaxSpreadMode          = SPREAD_MODE_ADAPTIVE; // MaxSpreadMode
-input double            SpreadMult_FX          = 2.0;           // SpreadMult_FX
 input double            SpreadMult_GOLD        = 2.5;           // SpreadMult_GOLD
-input double            SpreadMult_CRYPTO      = 3.0;           // SpreadMult_CRYPTO
-input double            InputMaxSlippagePts    = 0;             // MaxSlippagePts(0=市場別デフォルト)
-input double            InputMaxFillDeviationPts = 0;           // MaxFillDeviationPts(0=市場別デフォルト)
+input double            InputMaxSlippagePts    = 0;             // MaxSlippagePts(0=デフォルト)
+input double            InputMaxFillDeviationPts = 0;           // MaxFillDeviationPts(0=デフォルト)
 input double            InputMaxSpreadPts      = 0;             // MaxSpreadPts(FIXED時)
-// --- EntryGate: RR / RangeCost / SL倍率（市場別） ---
-input double            MinRR_EntryGate_FX      = 0.7;           // MinRR_EntryGate_FX
+// --- EntryGate ---
 input double            MinRR_EntryGate_GOLD    = 0.6;           // MinRR_EntryGate_GOLD
-input double            MinRR_EntryGate_CRYPTO  = 0.5;           // MinRR_EntryGate_CRYPTO
-input double            MinRangeCostMult_FX     = 2.5;           // MinRangeCostMult_FX
 input double            MinRangeCostMult_GOLD   = 2.5;           // MinRangeCostMult_GOLD
-input double            MinRangeCostMult_CRYPTO = 2.0;           // MinRangeCostMult_CRYPTO
-input double            SLATRMult_FX            = 0.7;           // SLATRMult_FX(SL=ImpulseStart±ATR*this)
-input double            SLATRMult_GOLD          = 0.8;           // SLATRMult_GOLD
-input double            SLATRMult_CRYPTO        = 0.7;           // SLATRMult_CRYPTO
-// --- TP Extension: TP = ImpulseEnd ± Range × this（市場別） ---
-input double            TPExtRatio_FX           = 0.382;         // TPExtRatio_FX(0=Fib100そのまま)
-input double            TPExtRatio_GOLD         = 0.382;         // TPExtRatio_GOLD(CHANGE-007)
-input double            TPExtRatio_CRYPTO       = 0.382;         // TPExtRatio_CRYPTO(CHANGE-006)
+input double            SLATRMult_GOLD          = 0.8;           // SLATRMult_GOLD(SL=ImpulseStart±ATR*this)
+// --- TP Extension ---
+input double            TPExtRatio_GOLD         = 0.382;         // TPExtRatio_GOLD(0=Fib100そのまま)
 
 // 【G3：戦略（基本触らない）】
-input bool              OptionalBand38         = false;          // OptionalBand38
 input bool              ConfirmModeOverride    = false;          // ConfirmModeOverride
 
 // 【G4：検証・デバッグ（普段触らない）】
@@ -117,15 +101,14 @@ ENUM_EA_STATE     g_previousState      = STATE_IDLE;
 
 // MarketProfile
 MarketProfileData g_profile;
-ENUM_MARKET_MODE  g_resolvedMarketMode = MARKET_MODE_FX;
 
-// === ANALYZE追加 === ImpulseSummary統計グローバル
+// ImpulseSummary統計グローバル
 ImpulseStats      g_stats;
 
 // Impulse
 ENUM_DIRECTION    g_impulseDir         = DIR_NONE;
-double            g_impulseStart       = 0.0;  // 0 (起点)
-double            g_impulseEnd         = 0.0;   // 100 (終点)
+double            g_impulseStart       = 0.0;
+double            g_impulseEnd         = 0.0;
 double            g_impulseHigh        = 0.0;
 double            g_impulseLow         = 0.0;
 bool              g_startAdjusted      = false;
@@ -147,8 +130,7 @@ double            g_fib786             = 0.0;
 
 // BandWidth
 double            g_bandWidthPts       = 0.0;
-double            g_effectiveBandWidthPts = 0.0; // Bands/Leaveに実際に使う帯幅（縮小後）
-
+double            g_effectiveBandWidthPts = 0.0;
 
 // Band上下限
 double            g_primaryBandUpper   = 0.0;
@@ -173,7 +155,7 @@ int               g_leaveBarCount_Deep       = 0;
 int               g_leaveBarCount_Opt38      = 0;
 
 // Touch2成立帯識別
-int               g_touch2BandId       = -1; // 0=Primary, 1=Deep, 2=Opt38
+int               g_touch2BandId       = -1; // 0=Primary, 1=Deep
 
 // Confirm
 ENUM_CONFIRM_TYPE g_confirmType        = CONFIRM_NONE;
@@ -185,7 +167,7 @@ double            g_microLow           = 0.0;
 bool              g_microHighValid     = false;
 bool              g_microLowValid      = false;
 
-// WickRejection状態（GOLD用）
+// WickRejection状態
 bool              g_wickRejectionSeen  = false;
 
 // Entry / Position
@@ -203,8 +185,7 @@ double            g_maxSpreadPts       = 0.0;
 // TradeUUID
 string            g_tradeUUID          = "";
 
-
-// Visualization object names (第16章)
+// Visualization object names
 string            g_fibObjName         = "";
 string            g_bandObjName        = "";
 // タイマーカウンタ（Freeze後からのBar数）
@@ -215,11 +196,11 @@ int               g_barsAfterTouch2    = 0;
 
 // Cooldownカウンタ
 int               g_cooldownBars       = 0;
-int               g_cooldownDuration   = 3; // 内部定数
+int               g_cooldownDuration   = 3;
 
 // GOLD DeepBand
 bool              g_goldDeepBandON     = false;
-bool              g_riskGateSoftPass   = false;  // ANALYZE時: RiskGateFail→FIB_ACTIVE継続、Confirm時にブロック
+bool              g_riskGateSoftPass   = false;
 
 // Logger
 int               g_logFileHandle      = INVALID_HANDLE;
@@ -238,23 +219,21 @@ datetime          g_leaveStartTime_Deep    = 0;
 datetime          g_leaveStartTime_Opt38   = 0;
 
 // ADAPTIVE Spread計算用
-int               g_spreadSampleMinutes = 15; // 内部定数
+int               g_spreadSampleMinutes = 15;
 
-// === CHANGE-008 === Exit EMAクロス用ハンドル・状態
+// Exit EMAクロス用ハンドル・状態
 int               g_exitEMAFastHandle  = INVALID_HANDLE;
 int               g_exitEMASlowHandle  = INVALID_HANDLE;
-bool              g_exitPending        = false;   // EMAクロス検出後の確認待ち
-int               g_exitPendingBars    = 0;       // ExitPending経過バー数
+bool              g_exitPending        = false;
+int               g_exitPendingBars    = 0;
 
 // ATRハンドル
 int               g_atrHandleM1        = INVALID_HANDLE;
 
-// === 13.9.6 MA Confluence ===
-// MA期間定義（MarketProfile内部・固定）
-// FX/GOLD: {5, 13, 21, 100, 200}   CRYPTO: {5, 13, 21, 100, 200, 365}
-int               g_maPeriods[];                     // 市場別に初期化
+// MA Confluence
+int               g_maPeriods[];
 int               g_maPeriodsCount     = 0;
-int               g_smaHandles[MA_MAX_PERIODS];      // SMAハンドル配列
+int               g_smaHandles[MA_MAX_PERIODS];
 
 // Impulse確定後のBar位置
 int               g_freezeConfirmedBarShift = 0;
@@ -344,7 +323,7 @@ void ResetAllState()
 
    g_fib382 = 0; g_fib500 = 0; g_fib618 = 0; g_fib786 = 0;
    g_bandWidthPts = 0;
-   g_effectiveBandWidthPts = 0;  // === IMPROVEMENT === 帯幅残存による次サイクルへの影響を防止
+   g_effectiveBandWidthPts = 0;
 
    g_primaryBandUpper = 0; g_primaryBandLower = 0;
    g_deepBandUpper = 0;    g_deepBandLower = 0;
@@ -375,10 +354,9 @@ void ResetAllState()
    g_goldDeepBandON   = false;
    g_riskGateSoftPass = false;
 
-   // === CHANGE-008 === ExitPendingリセット
    g_exitPending     = false;
    g_exitPendingBars = 0;
-   
+
    g_tradeUUID = "";
 }
 
@@ -387,46 +365,17 @@ void ResetAllState()
 //+------------------------------------------------------------------+
 void ProcessStateMachine()
 {
-   // EnableTrading=false でもStateMachineは稼働する（ログ・描画・監視は継続）
-   // Entry禁止制御はProcess_TOUCH_2_WAIT_CONFIRM内で行う
-
    switch(g_currentState)
    {
-      case STATE_IDLE:
-         Process_IDLE();
-         break;
-
-      case STATE_IMPULSE_FOUND:
-         Process_IMPULSE_FOUND();
-         break;
-
-      case STATE_IMPULSE_CONFIRMED:
-         Process_IMPULSE_CONFIRMED();
-         break;
-
-      case STATE_FIB_ACTIVE:
-         Process_FIB_ACTIVE();
-         break;
-
-      case STATE_TOUCH_1:
-         Process_TOUCH_1();
-         break;
-
-      case STATE_TOUCH_2_WAIT_CONFIRM:
-         Process_TOUCH_2_WAIT_CONFIRM();
-         break;
-
-      case STATE_ENTRY_PLACED:
-         Process_ENTRY_PLACED();
-         break;
-
-      case STATE_IN_POSITION:
-         Process_IN_POSITION();
-         break;
-
-      case STATE_COOLDOWN:
-         Process_COOLDOWN();
-         break;
+      case STATE_IDLE:                   Process_IDLE(); break;
+      case STATE_IMPULSE_FOUND:          Process_IMPULSE_FOUND(); break;
+      case STATE_IMPULSE_CONFIRMED:      Process_IMPULSE_CONFIRMED(); break;
+      case STATE_FIB_ACTIVE:             Process_FIB_ACTIVE(); break;
+      case STATE_TOUCH_1:                Process_TOUCH_1(); break;
+      case STATE_TOUCH_2_WAIT_CONFIRM:   Process_TOUCH_2_WAIT_CONFIRM(); break;
+      case STATE_ENTRY_PLACED:           Process_ENTRY_PLACED(); break;
+      case STATE_IN_POSITION:            Process_IN_POSITION(); break;
+      case STATE_COOLDOWN:               Process_COOLDOWN(); break;
    }
 }
 
@@ -436,19 +385,15 @@ void Process_IDLE()
 {
    if(!g_newBar) return;
 
-   // Impulse検出
    if(DetectImpulse())
    {
-      // TradeUUID発行（第13.7章）
       g_tradeUUID = GenerateTradeUUID();
       g_freezeCancelCount = 0;
 
-      // === ANALYZE追加 === 新Impulse開始時にg_statsリセット
       g_stats.Reset();
       g_stats.TradeUUID = g_tradeUUID;
       g_stats.StartTime = TimeCurrent();
 
-      // ADAPTIVE Spread更新（第12.3章: IMPULSE_FOUND発生時のみ）
       UpdateAdaptiveSpread();
 
       string rejectStage = "NONE";
@@ -465,7 +410,7 @@ void Process_IDLE()
          return;
       }
 
-      // === Impulse Exceed Filter (overextension guard) ===
+      // Impulse Exceed Filter
       if(!EvaluateImpulseExceedFilter(rejectStage))
       {
          g_stats.FinalState  = "IMPULSE_EXCEED_REJECT";
@@ -482,7 +427,6 @@ void Process_IDLE()
       ChangeState(STATE_IMPULSE_FOUND, "ImpulseDetected");
       WriteLog(LOG_IMPULSE, "", "", "dir=" + DirectionToString(g_impulseDir));
 
-      // === NOTIFY === Impulse検出時に1回だけ通知（仕様：Impulse only）
       SendImpulseNotification();
    }
 }
@@ -491,7 +435,6 @@ void Process_IMPULSE_FOUND()
 {
    if(!g_newBar) return;
 
-   // Freeze判定
    if(CheckFreeze())
    {
       g_frozen    = true;
@@ -508,20 +451,11 @@ void Process_IMPULSE_FOUND()
 
 void Process_IMPULSE_CONFIRMED()
 {
-   // 即座にFIB_ACTIVEへ遷移（Fib算出＋BandWidth確定）
+   // GOLD DeepBand判定
+   g_goldDeepBandON = EvaluateGoldDeepBand();
+   g_profile.deepBandEnabled = g_goldDeepBandON;
 
-   // 第6章: GOLD DeepBand判定（FIB_ACTIVE遷移直前に評価）
-   if(g_resolvedMarketMode == MARKET_MODE_GOLD)
-   {
-      g_goldDeepBandON = EvaluateGoldDeepBand();
-      g_profile.deepBandEnabled = g_goldDeepBandON;
-   }
-   else if(g_resolvedMarketMode == MARKET_MODE_CRYPTO)
-   {
-      g_goldDeepBandON = false; // CRYPTOは50-61.8がPrimary
-   }
-
-   // BandWidth確定（第10章: IMPULSE_CONFIRMED → FIB_ACTIVE遷移時）
+   // BandWidth確定
    CalculateBandWidth();
 
    // Fib算出
@@ -530,21 +464,19 @@ void Process_IMPULSE_CONFIRMED()
    // 押し帯計算
    CalculateBands();
 
-   // === 13.9.6 MA Confluence === IMPULSE_CONFIRMED時点で1回だけ評価
-   // RiskGateの前に配置: RiskGateFail時もMA状況を残すため
+   // MA Confluence
    EvaluateMAConfluence();
 
-   // === 統計記録（Pass/Fail共通：RiskGate分岐前に確定） ===
+   // 統計記録
    g_stats.RangePts         = MathAbs(g_impulseEnd - g_impulseStart);
    g_stats.BandWidthPts     = g_effectiveBandWidthPts;
    g_stats.LeaveDistancePts = g_effectiveBandWidthPts * g_profile.leaveDistanceMult;
    g_stats.SpreadBasePts    = g_spreadBasePts;
    {
-      // RR / RangeCostMult のプレビュー値を記録
       double _atr = GetATR_M1(0);
       double _entry = g_fib500;
       double _sl = 0.0;
-      double _tp = GetExtendedTP();   // CHANGE-006
+      double _tp = GetExtendedTP();
       double _point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
       double _spread = SymbolInfoDouble(Symbol(), SYMBOL_ASK) - SymbolInfoDouble(Symbol(), SYMBOL_BID);
 
@@ -563,10 +495,9 @@ void Process_IMPULSE_CONFIRMED()
       g_stats.RangeCostMult_Min    = g_profile.minRangeCostMult;
    }
 
-   // === RiskGate判定（DOC-CORE 3.2 / 9.4.1） ===
+   // RiskGate判定
    if(CheckNoEntryRiskGate())
    {
-      // --- Fail: 統計フラグを正しく記録 ---
       g_stats.RiskGatePass = false;
       g_stats.RejectStage  = "RISK_GATE_FAIL";
       g_stats.FinalState   = "RiskGateFail";
@@ -584,7 +515,6 @@ void Process_IMPULSE_CONFIRMED()
                ";spread=" + DoubleToString(_spread, _d) +
                ";band_dom_ratio=" + DoubleToString(_ratio, 3));
 
-      // DOC-CORE 3.2: LogLevel≠ANALYZE → IDLE（即終了）
       if(LogLevel != LOG_LEVEL_ANALYZE)
       {
          ChangeState(STATE_IDLE, "RiskGateFail");
@@ -592,18 +522,14 @@ void Process_IMPULSE_CONFIRMED()
          return;
       }
 
-      // DOC-CORE 3.2: ANALYZE → FIB_ACTIVEへ継続（SoftPass）
-      // Confirm成立時に RISK_GATE_SOFT_BLOCK で止める
       g_riskGateSoftPass = true;
    }
    else
    {
-      // --- Pass ---
       g_stats.RiskGatePass = true;
       g_riskGateSoftPass   = false;
    }
 
-   // 第16章: Fib描写（IMPULSE_CONFIRMED遷移時に開始）
    CreateFibVisualization();
    ChangeState(STATE_FIB_ACTIVE, "FibCalculated");
 
@@ -623,7 +549,7 @@ void Process_FIB_ACTIVE()
 
    g_barsAfterFreeze++;
 
-   // 構造無効チェック（FreezeCancelより優先：STRUCTURE_BREAKは最上位でIDLEへ）
+   // 構造無効チェック
    string br; int pr; string rl; double rp, ap, dp; int sh;
    if(CheckStructureInvalid_Detail(br, pr, rl, rp, ap, dp, sh))
    {
@@ -657,7 +583,7 @@ void Process_FIB_ACTIVE()
       return;
    }
 
-   // FreezeCancel判定（CancelWindow内 ＆ まだTouchが一度も発生していない場合のみ）
+   // FreezeCancel判定
    if(g_frozen &&
       g_barsAfterFreeze <= g_profile.freezeCancelWindowBars &&
       g_touchCount_Primary == 0 &&
@@ -679,7 +605,7 @@ void Process_FIB_ACTIVE()
       }
    }
 
-   // RetouchTimeLimit（第5.3.5章）
+   // RetouchTimeLimit
    if(g_barsAfterFreeze > g_profile.retouchTimeLimitBars)
    {
       g_stats.RejectStage = "RETOUCH_TIMEOUT";
@@ -701,7 +627,6 @@ void Process_FIB_ACTIVE()
 // FIB_ACTIVEからのTouch1検出用
 int ProcessTouchesForState()
 {
-   // 各帯のTouch1をチェック
    if(g_primaryBandUpper > 0 && g_primaryBandLower > 0)
    {
       if(CheckBandEntry(g_primaryBandUpper, g_primaryBandLower))
@@ -738,24 +663,6 @@ int ProcessTouchesForState()
       }
    }
 
-   if(g_optBand38Upper > 0 && g_optBand38Lower > 0 && g_profile.optionalBand38)
-   {
-      if(CheckBandEntry(g_optBand38Upper, g_optBand38Lower))
-      {
-         if(g_touchCount_Opt38 == 0 && !g_inBand_Opt38)
-         {
-            g_inBand_Opt38 = true;
-            g_touchCount_Opt38 = 1;
-            RecordTouch1(2);
-            return 2;
-         }
-      }
-      else
-      {
-         if(g_inBand_Opt38) g_inBand_Opt38 = false;
-      }
-   }
-
    return -1;
 }
 
@@ -763,10 +670,8 @@ void Process_TOUCH_1()
 {
    if(!g_newBar) return;
 
-   // Freeze後の経過本数を全Stateで前進させる（FreezeCancelWindow / RetouchTimeLimitの基準）
    g_barsAfterFreeze++;
 
-   // Spreadチェック（第5.3.3章）
    if(!IsSpreadOK())
    {
       g_stats.RejectStage = "SPREAD_TOO_WIDE";
@@ -775,7 +680,6 @@ void Process_TOUCH_1()
       return;
    }
 
-   // RiskGate（第5.3.4章）: true=NoEntry（失効）なので反転
    if(CheckNoEntryRiskGate())
    {
       g_stats.RejectStage = "RISK_GATE_FAIL";
@@ -818,7 +722,6 @@ void Process_TOUCH_1()
       return;
    }
 
-   // RetouchTimeLimit（第5.3.5章）
    if(g_barsAfterFreeze > g_profile.retouchTimeLimitBars)
    {
       g_stats.RejectStage = "RETOUCH_TIMEOUT";
@@ -827,7 +730,6 @@ void Process_TOUCH_1()
       return;
    }
 
-   // タッチ判定（Leave→Touch2 を含む正規ロジック）
    int touch2BandId = ProcessTouches();
    if(touch2BandId >= 0)
    {
@@ -836,51 +738,12 @@ void Process_TOUCH_1()
    }
 }
 
-void CheckAdditionalTouch1()
-{
-   // まだTouch1未達の帯をチェック
-   if(g_primaryBandUpper > 0 && g_touchCount_Primary == 0)
-   {
-      if(CheckBandEntry(g_primaryBandUpper, g_primaryBandLower) && !g_inBand_Primary)
-      {
-         g_inBand_Primary = true;
-         g_touchCount_Primary = 1;
-         WriteLog(LOG_TOUCH, "", "", "Touch1;BandId=0;LateDetect");
-         g_stats.Touch1Count++;  // === ANALYZE追加 ===
-      }
-   }
-
-   if(g_deepBandUpper > 0 && g_goldDeepBandON && g_touchCount_Deep == 0)
-   {
-      if(CheckBandEntry(g_deepBandUpper, g_deepBandLower) && !g_inBand_Deep)
-      {
-         g_inBand_Deep = true;
-         g_touchCount_Deep = 1;
-         WriteLog(LOG_TOUCH, "", "", "Touch1;BandId=1;LateDetect");
-         g_stats.Touch1Count++;  // === ANALYZE追加 ===
-      }
-   }
-
-   if(g_optBand38Upper > 0 && g_profile.optionalBand38 && g_touchCount_Opt38 == 0)
-   {
-      if(CheckBandEntry(g_optBand38Upper, g_optBand38Lower) && !g_inBand_Opt38)
-      {
-         g_inBand_Opt38 = true;
-         g_touchCount_Opt38 = 1;
-         WriteLog(LOG_TOUCH, "", "", "Touch1;BandId=2;LateDetect");
-         g_stats.Touch1Count++;  // === ANALYZE追加 ===
-      }
-   }
-}
-
 void Process_TOUCH_2_WAIT_CONFIRM()
 {
    if(!g_newBar) return;
 
-   // Freeze後の経過本数を全Stateで前進させる（RetouchTimeLimitの基準）
    g_barsAfterFreeze++;
 
-   // Spreadチェック（第5.3.3章）
    if(!IsSpreadOK())
    {
       g_stats.RejectStage = "SPREAD_TOO_WIDE";
@@ -889,7 +752,6 @@ void Process_TOUCH_2_WAIT_CONFIRM()
       return;
    }
 
-   // RiskGate（第5.3.4章）
    if(CheckNoEntryRiskGate())
    {
       g_stats.RejectStage = "RISK_GATE_FAIL";
@@ -932,7 +794,6 @@ void Process_TOUCH_2_WAIT_CONFIRM()
       return;
    }
 
-   // RetouchTimeLimit（第5.3.5章）
    if(g_barsAfterFreeze > g_profile.retouchTimeLimitBars)
    {
       g_stats.RejectStage = "RETOUCH_TIMEOUT";
@@ -941,7 +802,6 @@ void Process_TOUCH_2_WAIT_CONFIRM()
       return;
    }
 
-   // ConfirmTimeLimit（第5.3.6章）
    if(g_confirmWaitBars > g_profile.confirmTimeLimitBars)
    {
       g_stats.RejectStage = "CONFIRM_TIMEOUT";
@@ -950,9 +810,7 @@ void Process_TOUCH_2_WAIT_CONFIRM()
       return;
    }
 
-   // Confirm判定（第5.3.7章）
-   if(g_resolvedMarketMode == MARKET_MODE_FX || g_resolvedMarketMode == MARKET_MODE_GOLD)
-      UpdateFractalMicroLevels();
+   UpdateFractalMicroLevels();
 
    ENUM_CONFIRM_TYPE ct = EvaluateConfirm();
    if(ct != CONFIRM_NONE)
@@ -963,7 +821,6 @@ void Process_TOUCH_2_WAIT_CONFIRM()
 
       WriteLog(LOG_CONFIRM, "", "ConfirmOK", "ConfirmType=" + ConfirmTypeToString(ct));
 
-      // DOC-CORE 3.2: SoftGate経由（ANALYZE時RiskGateFail継続分）→ Entryせず終了
       if(g_riskGateSoftPass)
       {
          g_stats.RejectStage = "RISK_GATE_SOFT_BLOCK";
@@ -974,13 +831,13 @@ void Process_TOUCH_2_WAIT_CONFIRM()
          return;
       }
 
-      // === EntryGate: RR / RangeCost チェック（DOC-CORE 9.5） ===
+      // EntryGate: RangeCost チェック
       {
          double _egAtr = GetATR_M1(0);
          double _egEntry = (g_impulseDir == DIR_LONG)
                            ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
                            : SymbolInfoDouble(Symbol(), SYMBOL_BID);
-         double _egTP = GetExtendedTP();   // CHANGE-006: RangeCost評価用（理論TP）
+         double _egTP = GetExtendedTP();
          double _egSL = (g_impulseDir == DIR_LONG)
                         ? (g_impulseStart - _egAtr * g_profile.slATRMult)
                         : (g_impulseStart + _egAtr * g_profile.slATRMult);
@@ -990,11 +847,8 @@ void Process_TOUCH_2_WAIT_CONFIRM()
          double _egPoint  = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
          double _egRR     = (_egRisk > _egPoint * 0.5) ? (_egReward / _egRisk) : 0.0;
 
-         // (a) CHANGE-008: MinRR check 廃止（RR Gate無効化）
-         // RR値は記録のみ行い、Rejectしない
          g_stats.RR_Actual = _egRR;
 
-         // (b) MinRangeCostMult check（維持）
          double _egSpread = SymbolInfoDouble(Symbol(), SYMBOL_ASK) - SymbolInfoDouble(Symbol(), SYMBOL_BID);
          double _egRangeCost = (_egSpread > 0.0) ? (_egReward / _egSpread) : 999.0;
          if(_egRangeCost < g_profile.minRangeCostMult)
@@ -1012,11 +866,9 @@ void Process_TOUCH_2_WAIT_CONFIRM()
             return;
          }
 
-         // EntryGate Pass → RR/RangeCostを記録
          g_stats.RangeCostMult_Actual = _egRangeCost;
       }
 
-      // Entry実行
       if(!ExecuteEntry())
       {
          ChangeState(STATE_IDLE, "EntryRejected");
@@ -1033,15 +885,8 @@ void Process_TOUCH_2_WAIT_CONFIRM()
 
 void Process_ENTRY_PLACED()
 {
-   // 通常は即約定のため、この状態は一瞬
-   // 指値の場合のみ滞留する可能性あり
    if(!g_newBar) return;
 
-   // 指値未約定チェック
-   // （成行の場合はTOUCH_2_WAIT_CONFIRMからIN_POSITIONへ直接遷移済み）
-   // ここに来るのは指値が未約定の場合のみ
-
-   // 約定確認
    if(PositionSelectByTicket(g_ticket))
    {
       ChangeState(STATE_IN_POSITION, "OrderFilled");
@@ -1052,7 +897,6 @@ void Process_ENTRY_PLACED()
 void Process_IN_POSITION()
 {
    if(!g_newBar) return;
-
    ManagePosition();
 }
 
@@ -1074,12 +918,11 @@ void Process_COOLDOWN()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   // MarketProfile初期化
    InitMarketProfile();
 
    if(DumpMarketProfile)
    {
-      Print("[PROFILE] MarketMode=", MarketModeToString(g_resolvedMarketMode),
+      Print("[PROFILE] MarketMode=GOLD",
             " ImpulseATRMult=", g_profile.impulseATRMult,
             " SmallBodyRatio=", g_profile.smallBodyRatio,
             " FreezeCancelWindow=", g_profile.freezeCancelWindowBars,
@@ -1089,7 +932,6 @@ int OnInit()
             " TPExtRatio=", g_profile.tpExtensionRatio);
    }
 
-   // ATRハンドル作成
    g_atrHandleM1 = iATR(Symbol(), PERIOD_M1, 14);
    if(g_atrHandleM1 == INVALID_HANDLE)
    {
@@ -1097,7 +939,6 @@ int OnInit()
       return INIT_FAILED;
    }
 
-   // === CHANGE-008 === Exit EMAハンドル作成（M1固定）
    g_exitEMAFastHandle = iMA(Symbol(), PERIOD_M1, ExitMAFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
    g_exitEMASlowHandle = iMA(Symbol(), PERIOD_M1, ExitMASlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
    if(g_exitEMAFastHandle == INVALID_HANDLE || g_exitEMASlowHandle == INVALID_HANDLE)
@@ -1106,7 +947,6 @@ int OnInit()
       return INIT_FAILED;
    }
 
-   // === 13.9.6 MA Confluence === SMAハンドル作成
    InitMAPeriods();
    for(int i = 0; i < MA_MAX_PERIODS; i++)
       g_smaHandles[i] = INVALID_HANDLE;
@@ -1115,30 +955,20 @@ int OnInit()
    {
       g_smaHandles[i] = iMA(Symbol(), PERIOD_M1, g_maPeriods[i], 0, MODE_SMA, PRICE_CLOSE);
       if(g_smaHandles[i] == INVALID_HANDLE)
-      {
          Print("WARNING: Failed to create SMA handle for period=", g_maPeriods[i]);
-      }
    }
 
-   // Spread初期値
    if(MaxSpreadMode == SPREAD_MODE_FIXED)
-   {
       g_maxSpreadPts = InputMaxSpreadPts;
-   }
    else
-   {
-      // ADAPTIVE: 仮の初期値（IMPULSE_FOUND時に更新）
       g_maxSpreadPts = GetCurrentSpreadPts() * g_profile.spreadMult;
-   }
 
-   // Logger初期化
    LoggerInit();
 
-   // 初期State
    g_currentState = STATE_IDLE;
    g_lastBarTime = 0;
 
-   Print(EA_NAME, " initialized. Mode=", MarketModeToString(g_resolvedMarketMode));
+   Print(EA_NAME, " initialized. Mode=GOLD");
 
    return INIT_SUCCEEDED;
 }
@@ -1148,45 +978,23 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   // Logger解放
    LoggerDeinit();
 
-   // TF変更(チャート変更)等ではオブジェクトを残す（視認性維持）
-   bool keep_visuals = (reason == REASON_CHARTCHANGE);
-
-   if(!keep_visuals)
-   {
-      // Fib Visualization削除（第16.8章）
+   if(reason != REASON_CHARTCHANGE)
       DeleteCurrentFibVisualization();
-   }
 
-   // ATRハンドル解放
    if(g_atrHandleM1 != INVALID_HANDLE)
-   {
-      IndicatorRelease(g_atrHandleM1);
-      g_atrHandleM1 = INVALID_HANDLE;
-   }
+   { IndicatorRelease(g_atrHandleM1); g_atrHandleM1 = INVALID_HANDLE; }
 
-   // === CHANGE-008 === Exit EMAハンドル解放
    if(g_exitEMAFastHandle != INVALID_HANDLE)
-   {
-      IndicatorRelease(g_exitEMAFastHandle);
-      g_exitEMAFastHandle = INVALID_HANDLE;
-   }
+   { IndicatorRelease(g_exitEMAFastHandle); g_exitEMAFastHandle = INVALID_HANDLE; }
    if(g_exitEMASlowHandle != INVALID_HANDLE)
-   {
-      IndicatorRelease(g_exitEMASlowHandle);
-      g_exitEMASlowHandle = INVALID_HANDLE;
-   }
+   { IndicatorRelease(g_exitEMASlowHandle); g_exitEMASlowHandle = INVALID_HANDLE; }
 
-   // === 13.9.6 MA Confluence === SMAハンドル解放
    for(int i = 0; i < g_maPeriodsCount; i++)
    {
       if(g_smaHandles[i] != INVALID_HANDLE)
-      {
-         IndicatorRelease(g_smaHandles[i]);
-         g_smaHandles[i] = INVALID_HANDLE;
-      }
+      { IndicatorRelease(g_smaHandles[i]); g_smaHandles[i] = INVALID_HANDLE; }
    }
 
    Print(EA_NAME, " deinitialized. Reason=", reason);
@@ -1197,13 +1005,9 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // 新しいバー検出
    g_newBar = IsNewBar();
 
-   // Spread/Slippage超過チェック（State維持、エントリー禁止のみ）
-   // これは取引禁止フラグとして機能し、構造無効とはしない（第9.4章）
-
-   // FreezeCancel チェック（Tick単位：CancelWindowBars内のリアルタイム監視）
+   // FreezeCancel チェック（Tick単位）
    if(g_frozen && g_currentState >= STATE_IMPULSE_CONFIRMED &&
       g_currentState <= STATE_TOUCH_1)
    {
@@ -1214,7 +1018,7 @@ void OnTick()
             g_frozen = false;
             g_freezeCancelCount++;
 
-            g_stats.FreezeCancelCount = g_freezeCancelCount;  // === ANALYZE追加 ===
+            g_stats.FreezeCancelCount = g_freezeCancelCount;
 
             WriteLog(LOG_IMPULSE, "", "", "FreezeCancel;count=" + IntegerToString(g_freezeCancelCount));
             ChangeState(STATE_IMPULSE_FOUND, "FreezeCancelled_Tick");
@@ -1222,10 +1026,8 @@ void OnTick()
       }
    }
 
-   // メインStateMachine処理
    ProcessStateMachine();
-   
-   // 状態がアクティブな間、帯の右端を常に最新の時間に更新する（微修正案）
+
    if(g_currentState >= STATE_FIB_ACTIVE && g_currentState <= STATE_IN_POSITION)
    {
       if(g_bandObjName != "" && ObjectFind(0, g_bandObjName) >= 0)

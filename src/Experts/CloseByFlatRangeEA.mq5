@@ -53,6 +53,11 @@ input double             TrailATRMult          = 1.0;             // ATR multipl
 input int                WaitBarsAfterFlat     = 30;              // Max wait bars after flat (safety valve)
 input ENUM_FAILSAFE      FailSafe              = FS_MARKET_CLOSE; // Failsafe action
 
+//--- G6: Startup Filter (used when MarketMode=Custom)
+input bool               EnableStartupFilter   = true;            // Startup condition filter
+input double             StartProfitATRMult    = 1.0;             // Min profit / ATR multiplier
+input int                StartMinBars          = 5;               // Min bars from entry
+
 //--- G7: Label
 input bool               ShowPanel             = true;
 input int                LabelX                = 10;
@@ -87,6 +92,8 @@ int                 w_flatSlopeLookbackBars;
 double              w_flatSlopeAtrMult;
 int                 w_rangeLookbackBars;
 int                 w_waitBarsAfterFlat;
+double              w_startProfitATRMult;
+int                 w_startMinBars;
 
 int       g_hMA             = INVALID_HANDLE;
 int       g_hATR            = INVALID_HANDLE;
@@ -153,6 +160,8 @@ void ApplyPreset()
          w_flatSlopeAtrMult     = 0.03;
          w_rangeLookbackBars    = 10;
          w_waitBarsAfterFlat    = 16;
+         w_startProfitATRMult   = 0.5;
+         w_startMinBars         = 3;
          break;
 
       case MM_GOLD:
@@ -162,6 +171,8 @@ void ApplyPreset()
          w_flatSlopeAtrMult     = 0.30;
          w_rangeLookbackBars    = 20;
          w_waitBarsAfterFlat    = 30;
+         w_startProfitATRMult   = 0.8;
+         w_startMinBars         = 4;
          break;
 
       case MM_CRYPTO:
@@ -171,6 +182,8 @@ void ApplyPreset()
          w_flatSlopeAtrMult     = 0.03;
          w_rangeLookbackBars    = 20;
          w_waitBarsAfterFlat    = 40;
+         w_startProfitATRMult   = 1.0;
+         w_startMinBars         = 5;
          break;
 
       case MM_CUSTOM:
@@ -181,6 +194,8 @@ void ApplyPreset()
          w_flatSlopeAtrMult     = FlatSlopeAtrMult;
          w_rangeLookbackBars    = RangeLookbackBars;
          w_waitBarsAfterFlat    = WaitBarsAfterFlat;
+         w_startProfitATRMult   = StartProfitATRMult;
+         w_startMinBars         = StartMinBars;
          break;
    }
 
@@ -191,7 +206,10 @@ void ApplyPreset()
          " Mult=", DoubleToString(w_flatSlopeAtrMult, 2),
          " RangeLB=", w_rangeLookbackBars,
          " WaitBars=", w_waitBarsAfterFlat,
-         " TrailATR=", DoubleToString(TrailATRMult, 2));
+         " TrailATR=", DoubleToString(TrailATRMult, 2),
+         " StartFilter=", (EnableStartupFilter ? "ON" : "OFF"),
+         " ProfitATR=", DoubleToString(w_startProfitATRMult, 2),
+         " MinBars=", w_startMinBars);
 }
 
 //+------------------------------------------------------------------+
@@ -757,6 +775,105 @@ void ClearSavedState()
 }
 
 //+------------------------------------------------------------------+
+//| Startup Condition Filter                                          |
+//+------------------------------------------------------------------+
+string CheckStartupConditions()
+{
+   string warns[];
+   int warnCount = 0;
+
+   if(!PositionSelectByTicket(TargetTicket))
+      return "";
+
+   // --- 1. Unrealized profit vs ATR ---
+   double atrVal = 0.0;
+   double atrBuf[1];
+   bool atrOK = (CopyBuffer(g_hATR, 0, 1, 1, atrBuf) >= 1 && atrBuf[0] > 0);
+   if(atrOK) atrVal = atrBuf[0];
+
+   if(atrOK)
+   {
+      double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+      double unrealized;
+      if(g_posType == POSITION_TYPE_BUY)
+         unrealized = currentPrice - g_entryPrice;
+      else
+         unrealized = g_entryPrice - currentPrice;
+
+      double required = atrVal * w_startProfitATRMult;
+      if(unrealized < required)
+      {
+         warnCount++;
+         ArrayResize(warns, warnCount);
+         warns[warnCount-1] = StringFormat("[%d] Profit: %.1f pts < ATR(14) x %.1f = %.1f pts\n"
+                                           "     Trend may not be mature enough",
+                                           warnCount,
+                                           unrealized / _Point,
+                                           w_startProfitATRMult,
+                                           required / _Point);
+      }
+   }
+
+   // --- 2. Elapsed bars from entry ---
+   int totalBars = Bars(_Symbol, SignalTF, g_entryTime, TimeCurrent());
+   int elapsed = (totalBars > 0) ? totalBars - 1 : 0;
+
+   if(elapsed < w_startMinBars)
+   {
+      warnCount++;
+      ArrayResize(warns, warnCount);
+      int minMin = w_startMinBars * (int)(PeriodSeconds(SignalTF) / 60);
+      warns[warnCount-1] = StringFormat("[%d] Elapsed: %d bars < min %d bars (%d min)\n"
+                                        "     Position too new for flat monitoring",
+                                        warnCount, elapsed, w_startMinBars, minMin);
+   }
+
+   // --- 3. MA slope vs entry direction ---
+   double maCurr[1], maOld[1];
+   if(CopyBuffer(g_hMA, 0, 1, 1, maCurr) >= 1 &&
+      CopyBuffer(g_hMA, 0, 1 + w_flatSlopeLookbackBars, 1, maOld) >= 1 && atrOK)
+   {
+      double slope    = maCurr[0] - maOld[0];
+      double slopePts = MathAbs(slope) / _Point;
+      double atrPts   = atrVal / _Point;
+      bool   isFlat   = (slopePts <= atrPts * w_flatSlopeAtrMult);
+      bool   wrongDir = false;
+
+      if(g_posType == POSITION_TYPE_BUY && slope <= 0)
+         wrongDir = true;
+      else if(g_posType == POSITION_TYPE_SELL && slope >= 0)
+         wrongDir = true;
+
+      if(isFlat || wrongDir)
+      {
+         warnCount++;
+         ArrayResize(warns, warnCount);
+         string status = wrongDir ? ("opposite to " + g_posDir) : "flat/horizontal";
+         warns[warnCount-1] = StringFormat("[%d] MA(%d) slope: %s\n"
+                                           "     Slope=%.1f pts, Threshold=%.1f pts",
+                                           warnCount, w_flatMaPeriod, status,
+                                           slopePts, atrPts * w_flatSlopeAtrMult);
+      }
+   }
+
+   if(warnCount == 0)
+      return "";
+
+   // Build message
+   string msg = "Startup Filter Warning  [" + _Symbol + " " + g_posDir + "]\n"
+              + "Ticket: " + (string)TargetTicket + "  |  Mode: " + MarketModeToString() + "\n"
+              + "-------------------------------------------\n\n";
+
+   for(int i = 0; i < warnCount; i++)
+      msg += warns[i] + "\n\n";
+
+   msg += "[OK] = Acknowledge warning, continue\n"
+          "[Cancel] = Stop EA";
+
+   return msg;
+}
+
+//+------------------------------------------------------------------+
 int OnInit()
 {
    g_objPrefix = "CloseByFlatRangeEA_" + (string)TargetTicket + "_";
@@ -822,6 +939,25 @@ int OnInit()
    // Try to restore saved state (RESTORE event written inside LoadState)
    if(LoadState())
       return INIT_SUCCEEDED;
+
+   // Startup filter (fresh attach only)
+   if(EnableStartupFilter)
+   {
+      string warnings = CheckStartupConditions();
+      if(warnings != "")
+      {
+         Print("[CloseByFlatRangeEA] Startup filter: warnings detected");
+         int mbResult = MessageBox(warnings,
+                                   "CloseByFlatRangeEA - Startup Filter",
+                                   MB_OKCANCEL | MB_ICONWARNING);
+         if(mbResult == IDCANCEL)
+         {
+            Print("[CloseByFlatRangeEA] EA stopped by user (startup filter)");
+            return INIT_FAILED;
+         }
+         Print("[CloseByFlatRangeEA] Startup warning acknowledged, continuing");
+      }
+   }
 
    // Fresh start
    WriteEventLog("ATTACH");

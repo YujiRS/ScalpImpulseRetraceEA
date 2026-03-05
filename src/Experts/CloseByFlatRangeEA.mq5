@@ -34,7 +34,7 @@ input ENUM_MARKET_MODE   MarketMode            = MM_CUSTOM;       // Market mode
 
 //--- G1: Target
 input ulong              TargetTicket          = 0;
-input ENUM_TIMEFRAMES    SignalTF              = PERIOD_CURRENT;
+input ENUM_TIMEFRAMES    SignalTF              = PERIOD_M5;
 
 //--- G2: Flat Detection (used when MarketMode=Custom)
 input ENUM_FLAT_MA_METHOD FlatMaMethod         = FLAT_MA_SMA;     // MA method

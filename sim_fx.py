@@ -1,14 +1,10 @@
 """
-sim_fx.py  –  FX M5-slope filter comparison simulation
-======================================================
-Purpose: Compare entry filter effectiveness:
-  - Baseline : M15 EMA50 slope (current: FLAT=Reject, counter=Reject)
-  - New(Base): M15 counter-only Reject + M5 SMA21 slope MID+ required
-  - New(Loose): M15 counter-only Reject + M5 direction match only
+sim_fx.py  –  FX M5-slope filter comparison simulation (Phase 1 + Phase 2)
+==========================================================================
+Phase 1: Touch1→Leave→Touch2→Confirm, SL=Fib0±ATR×0.7, StructBreak active
+Phase 2: Touch1→Confirm (Touch2 abolished), SL=Entry±ATR×0.7, no StructBreak
 
-Entry : DOC-CORE FX spec (Impulse→Freeze→Fib50 band→Touch→Leave→ReTouch→Confirm)
-Exit  : CloseByFlatRangeEA FX preset (M5 SMA21 flat→Range→BO→ATR trail / FailSafe)
-
+Both phases share: Impulse detection, Freeze, Fib/Band, RiskGate, Filters, Exit
 Dependencies: pandas, numpy
 """
 
@@ -522,6 +518,149 @@ def run_entry_logic(imp: Impulse, m1: pd.DataFrame, m1_atr: pd.Series) -> TradeR
 
     return result
 
+
+def run_entry_logic_p2(imp: Impulse, m1: pd.DataFrame, m1_atr: pd.Series) -> TradeResult:
+    """Phase 2: Touch1→Confirm (no Leave/Touch2), SL=Entry±ATR, no StructBreak."""
+    result = TradeResult(impulse=imp, direction=imp.direction)
+    result.impulse_time = str(m1.index[imp.bar_idx])
+
+    opens = m1["open"].values
+    highs = m1["high"].values
+    lows = m1["low"].values
+    closes = m1["close"].values
+    atr_vals = m1_atr.values
+    spreads = m1["spread"].values
+    n = len(m1)
+    d = imp.direction
+
+    # ── Freeze detection (identical to Phase 1) ──
+    frozen_end = imp.end_price
+    freeze_bar = None
+
+    for i in range(imp.bar_idx + 1, min(imp.bar_idx + 200, n)):
+        if d == Dir.LONG:
+            if highs[i] > frozen_end:
+                frozen_end = highs[i]
+        else:
+            if lows[i] < frozen_end:
+                frozen_end = lows[i]
+
+        update_stop = False
+        if d == Dir.LONG and highs[i] <= frozen_end:
+            update_stop = True
+        if d == Dir.SHORT and lows[i] >= frozen_end:
+            update_stop = True
+
+        opposite_color = False
+        if d == Dir.LONG and closes[i] < opens[i]:
+            opposite_color = True
+        if d == Dir.SHORT and closes[i] > opens[i]:
+            opposite_color = True
+
+        if update_stop and opposite_color:
+            freeze_bar = i
+            break
+
+    if freeze_bar is None:
+        result.reject_stage = "NO_FREEZE"
+        return result
+
+    # ── Freeze cancel check (identical) ──
+    cancelled = False
+    for j in range(freeze_bar + 1, min(freeze_bar + CANCEL_WINDOW_BARS + 1, n)):
+        if d == Dir.LONG and highs[j] > frozen_end + point():
+            cancelled = True
+            break
+        if d == Dir.SHORT and lows[j] < frozen_end - point():
+            cancelled = True
+            break
+
+    if cancelled:
+        result.reject_stage = "FREEZE_CANCEL"
+        return result
+
+    # ── Set Fib levels (identical) ──
+    imp.freeze_bar = freeze_bar
+    imp.freeze_end = frozen_end
+    imp.end_price = frozen_end
+    result.freeze_time = str(m1.index[freeze_bar])
+
+    range_price = abs(frozen_end - imp.start_price)
+    imp.range_pts = range_price / point()
+
+    sp = spreads[freeze_bar] if freeze_bar < n else spreads[-1]
+    imp.spread_at_freeze = sp
+    band_width_price = sp * point() * SPREAD_BAND_MULT
+    imp.band_width = band_width_price
+
+    if d == Dir.LONG:
+        fib50 = frozen_end - range_price * FIB_PRIMARY
+    else:
+        fib50 = frozen_end + range_price * FIB_PRIMARY
+    imp.fib50 = fib50
+    imp.band_upper = fib50 + band_width_price
+    imp.band_lower = fib50 - band_width_price
+
+    # ── RiskGate (identical) ──
+    band_dom_ratio = (2 * band_width_price) / range_price if range_price > 0 else 999
+    if band_dom_ratio >= 0.85:
+        result.reject_stage = "RISK_GATE_BAND_DOM"
+        return result
+
+    # ── Phase 2: Touch1 → Confirm (no Leave/Touch2, no StructBreak) ──
+    bu = imp.band_upper
+    bl = imp.band_lower
+    search_start = freeze_bar + CANCEL_WINDOW_BARS + 1
+    touch1_bar = None
+    confirm_deadline = None
+    # Use same overall time window as Phase 1
+    max_bar = min(search_start + RETOUCH_TIME_LIMIT_BARS + CONFIRM_TIME_LIMIT_BARS + 10, n)
+
+    for i in range(search_start, max_bar):
+        if touch1_bar is None:
+            # Wait for Touch1
+            touched = False
+            if d == Dir.LONG and lows[i] <= bu:
+                touched = True
+            if d == Dir.SHORT and highs[i] >= bl:
+                touched = True
+            if touched:
+                touch1_bar = i
+                confirm_deadline = i + CONFIRM_TIME_LIMIT_BARS
+        else:
+            # Confirm phase (no StructBreak check in P2)
+            if i > confirm_deadline:
+                result.reject_stage = "NO_CONFIRM"
+                return result
+
+            if _check_engulfing(opens, highs, lows, closes, i, d):
+                result.entry_bar = i
+                result.confirm_type = "Engulfing"
+                break
+            if _check_microbreak(highs, lows, closes, i, d):
+                result.entry_bar = i
+                result.confirm_type = "MicroBreak"
+                break
+
+    if result.entry_bar is None:
+        if result.reject_stage == "":
+            if touch1_bar is None:
+                result.reject_stage = "NO_TOUCH"
+            else:
+                result.reject_stage = "NO_CONFIRM"
+        return result
+
+    # ── Phase 2 SL: EntryPrice ± ATR × SLATRMult (detached from Fib0) ──
+    eb = result.entry_bar
+    result.entry_price = closes[eb]
+    atr_at_entry = atr_vals[eb] if not np.isnan(atr_vals[eb]) else imp.atr_at_impulse
+    if d == Dir.LONG:
+        result.sl_price = result.entry_price - atr_at_entry * SL_ATR_MULT
+    else:
+        result.sl_price = result.entry_price + atr_at_entry * SL_ATR_MULT
+
+    return result
+
 # ═══════════════════════════════════════════════════════════════════════
 # 5. Filter evaluation
 # ═══════════════════════════════════════════════════════════════════════
@@ -783,6 +922,133 @@ def _m5_to_m1_idx(m5_ts: pd.Timestamp, m1: pd.DataFrame) -> int:
 # 7. Main simulation
 # ═══════════════════════════════════════════════════════════════════════
 
+def _collect_stats(results: list[TradeResult], label: str) -> dict:
+    """Compute summary stats dict for a phase's results."""
+    total = len(results)
+    has_entry = [r for r in results if r.entry_bar is not None]
+    no_entry = [r for r in results if r.entry_bar is None]
+
+    reject_counts: dict[str, int] = {}
+    for r in no_entry:
+        k = r.reject_stage or "UNKNOWN"
+        reject_counts[k] = reject_counts.get(k, 0) + 1
+
+    filter_stats: dict[str, dict] = {}
+    for name, attr in [("Baseline", "baseline_pass"),
+                       ("Base", "base_pass"),
+                       ("Loose", "loose_pass")]:
+        trades = [r for r in has_entry if getattr(r, attr) and r.exit_reason]
+        wins = [t for t in trades if t.pnl_pips > 0]
+        losses = [t for t in trades if t.pnl_pips <= 0]
+        gross_win = sum(t.pnl_pips for t in wins) if wins else 0
+        gross_loss = abs(sum(t.pnl_pips for t in losses)) if losses else 0
+
+        exit_reasons: dict[str, int] = {}
+        for t in trades:
+            exit_reasons[t.exit_reason] = exit_reasons.get(t.exit_reason, 0) + 1
+
+        filter_stats[name] = {
+            "pass": sum(1 for r in has_entry if getattr(r, attr)),
+            "trades": len(trades),
+            "wins": len(wins),
+            "win_rate": 100 * len(wins) / len(trades) if trades else 0,
+            "avg_pnl": float(np.mean([t.pnl_pips for t in trades])) if trades else 0,
+            "tot_pnl": sum(t.pnl_pips for t in trades),
+            "pf": gross_win / gross_loss if gross_loss > 0 else float("inf"),
+            "exit_reasons": exit_reasons,
+        }
+
+    return {
+        "label": label,
+        "total": total,
+        "entries": len(has_entry),
+        "rejects": len(no_entry),
+        "reject_counts": reject_counts,
+        "filter_stats": filter_stats,
+    }
+
+
+def _print_phase(results: list[TradeResult], phase_label: str):
+    """Print detailed results table and summary for one phase."""
+    header = (f"{'Time':<22} {'Dir':<6} {'RangePts':>9} {'Sprd':>5} "
+              f"{'Confirm':<11} {'Baseline':<15} {'Base':<20} {'Loose':<20} "
+              f"{'PnL':>8} {'Hold':>5} {'Exit':<12} {'Reject':<20}")
+    print(header)
+    print("-" * len(header))
+
+    for r in results:
+        d_str = "LONG" if r.direction == Dir.LONG else "SHORT"
+        t = r.impulse_time[:19] if r.impulse_time else ""
+        rng = f"{r.impulse.range_pts:.1f}"
+        sp = f"{r.impulse.spread_at_freeze:.0f}"
+        conf = r.confirm_type if r.confirm_type else "-"
+        bl = r.baseline_reason
+        ba = r.base_reason
+        lo = r.loose_reason
+        pnl = f"{r.pnl_pips:.1f}" if r.entry_bar is not None else "-"
+        hold = str(r.hold_bars) if r.hold_bars > 0 else "-"
+        ex = r.exit_reason if r.exit_reason else "-"
+        rej = r.reject_stage if r.reject_stage else "-"
+        print(f"{t:<22} {d_str:<6} {rng:>9} {sp:>5} "
+              f"{conf:<11} {bl:<15} {ba:<20} {lo:<20} "
+              f"{pnl:>8} {hold:>5} {ex:<12} {rej:<20}")
+
+    stats = _collect_stats(results, phase_label)
+    total = stats["total"]
+    print(f"\n  Total: {total}  Entry: {stats['entries']}  Rejected: {stats['rejects']}")
+
+    if stats["reject_counts"]:
+        print("  Reject breakdown:")
+        for k, v in sorted(stats["reject_counts"].items(), key=lambda x: -x[1]):
+            print(f"    {k:<25} {v:>4}  ({100*v/total:.1f}%)")
+
+    print(f"\n  {'Filter':<12} {'Pass':>5} {'Trades':>7} {'Win':>5} {'WinRate':>8} "
+          f"{'AvgPnL':>8} {'TotPnL':>9} {'PF':>6}")
+    print("  " + "-" * 65)
+    for name in ["Baseline", "Base", "Loose"]:
+        fs = stats["filter_stats"][name]
+        if fs["trades"] == 0:
+            print(f"  {name:<12} {fs['pass']:>5} {'0':>7} {'-':>5} {'-':>8} "
+                  f"{'-':>8} {'-':>9} {'-':>6}")
+        else:
+            print(f"  {name:<12} {fs['pass']:>5} {fs['trades']:>7} {fs['wins']:>5} "
+                  f"{fs['win_rate']:>7.1f}% {fs['avg_pnl']:>8.1f} "
+                  f"{fs['tot_pnl']:>9.1f} {fs['pf']:>6.2f}")
+
+
+def _run_phase(impulses: list[Impulse], m1, m1_atr, m15, m15_ema50, m15_atr,
+               m5, m5_sma, m5_atr, phase: int) -> list[TradeResult]:
+    """Run one phase over all impulses. phase=1 or 2."""
+    import copy
+    results: list[TradeResult] = []
+    last_done_bar = 0
+
+    for imp_orig in impulses:
+        imp = copy.deepcopy(imp_orig)
+        if imp.bar_idx <= last_done_bar:
+            continue
+
+        if phase == 1:
+            tr = run_entry_logic(imp, m1, m1_atr)
+        else:
+            tr = run_entry_logic_p2(imp, m1, m1_atr)
+
+        evaluate_filters(tr, m1, m15, m15_ema50, m15_atr, m5, m5_sma, m5_atr)
+
+        if tr.entry_bar is not None:
+            simulate_exit(tr, m1, m5, m5_sma, m5_atr)
+            if tr.exit_bar is not None:
+                last_done_bar = tr.exit_bar
+            else:
+                last_done_bar = tr.entry_bar + 30
+        else:
+            last_done_bar = imp.bar_idx + 10
+
+        results.append(tr)
+
+    return results
+
+
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     data_path = os.path.join(script_dir, "sim_dat",
@@ -793,7 +1059,7 @@ def main():
         sys.exit(1)
 
     print("=" * 70)
-    print("sim_fx.py  –  FX M5 slope filter comparison")
+    print("sim_fx.py  –  FX M5 slope filter comparison (Phase 1 + Phase 2)")
     print("=" * 70)
 
     # ── Load & resample ──
@@ -818,127 +1084,102 @@ def main():
     impulses = detect_impulses(m1, m1_atr)
     print(f"    Raw impulses found: {len(impulses)}")
 
-    # ── Process each impulse ──
-    print("[4] Running entry/exit state machine + filters …")
-    results: list[TradeResult] = []
+    # ── Phase 1 ──
+    print("\n[4a] Phase 1: Touch1→Leave→Touch2→Confirm, SL=Fib0±ATR …")
+    p1 = _run_phase(impulses, m1, m1_atr, m15, m15_ema50, m15_atr,
+                    m5, m5_sma, m5_atr, phase=1)
+    print(f"     Impulses processed: {len(p1)}")
 
-    # Track active impulse to avoid overlaps
-    last_done_bar = 0
-
-    for imp in impulses:
-        if imp.bar_idx <= last_done_bar:
-            continue  # skip overlapping impulse
-
-        tr = run_entry_logic(imp, m1, m1_atr)
-        evaluate_filters(tr, m1, m15, m15_ema50, m15_atr, m5, m5_sma, m5_atr)
-
-        # Simulate exit for entries that pass at least one filter
-        if tr.entry_bar is not None:
-            simulate_exit(tr, m1, m5, m5_sma, m5_atr)
-            if tr.exit_bar is not None:
-                last_done_bar = tr.exit_bar
-            else:
-                last_done_bar = tr.entry_bar + 30
-        else:
-            last_done_bar = imp.bar_idx + 10  # small cooldown
-
-        results.append(tr)
-
-    print(f"    Impulses processed: {len(results)}")
+    # ── Phase 2 ──
+    print("[4b] Phase 2: Touch1→Confirm (A), SL=Entry±ATR (B) …")
+    p2 = _run_phase(impulses, m1, m1_atr, m15, m15_ema50, m15_atr,
+                    m5, m5_sma, m5_atr, phase=2)
+    print(f"     Impulses processed: {len(p2)}")
 
     # ═══════════════════════════════════════════════════════════════════
-    # 8. Output
+    # Output
     # ═══════════════════════════════════════════════════════════════════
-    print("\n[5] Results\n")
-
-    # ── Impulse list ──
-    header = (f"{'Time':<22} {'Dir':<6} {'RangePts':>9} {'Sprd':>5} "
-              f"{'Confirm':<11} {'Baseline':<15} {'Base':<20} {'Loose':<20} "
-              f"{'PnL':>8} {'Hold':>5} {'Exit':<12} {'Reject':<20}")
-    print(header)
-    print("-" * len(header))
-
-    for r in results:
-        d_str = "LONG" if r.direction == Dir.LONG else "SHORT"
-        t = r.impulse_time[:19] if r.impulse_time else ""
-        rng = f"{r.impulse.range_pts:.1f}"
-        sp = f"{r.impulse.spread_at_freeze:.0f}"
-        conf = r.confirm_type if r.confirm_type else "-"
-        bl = r.baseline_reason
-        ba = r.base_reason
-        lo = r.loose_reason
-        pnl = f"{r.pnl_pips:.1f}" if r.entry_bar is not None else "-"
-        hold = str(r.hold_bars) if r.hold_bars > 0 else "-"
-        ex = r.exit_reason if r.exit_reason else "-"
-        rej = r.reject_stage if r.reject_stage else "-"
-        print(f"{t:<22} {d_str:<6} {rng:>9} {sp:>5} "
-              f"{conf:<11} {bl:<15} {ba:<20} {lo:<20} "
-              f"{pnl:>8} {hold:>5} {ex:<12} {rej:<20}")
-
-    # ── Summary stats ──
     print("\n" + "=" * 70)
-    print("FILTER COMPARISON SUMMARY")
+    print("PHASE 1 DETAIL  (Touch1→Leave→Touch2→Confirm, SL=Fib0)")
+    print("=" * 70 + "\n")
+    _print_phase(p1, "Phase1")
+
+    print("\n" + "=" * 70)
+    print("PHASE 2 DETAIL  (Touch1→Confirm, SL=Entry±ATR)")
+    print("=" * 70 + "\n")
+    _print_phase(p2, "Phase2")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # Phase 1 vs Phase 2 Comparison
+    # ═══════════════════════════════════════════════════════════════════
+    s1 = _collect_stats(p1, "Phase1")
+    s2 = _collect_stats(p2, "Phase2")
+
+    print("\n" + "=" * 70)
+    print("PHASE 1 vs PHASE 2 COMPARISON")
     print("=" * 70)
 
-    total = len(results)
-    has_entry = [r for r in results if r.entry_bar is not None]
-    no_entry = [r for r in results if r.entry_bar is None]
+    print(f"\n{'Metric':<28} {'Phase1':>10} {'Phase2':>10} {'Delta':>10}")
+    print("-" * 62)
+    print(f"{'Impulses processed':<28} {s1['total']:>10} {s2['total']:>10} "
+          f"{s2['total']-s1['total']:>+10}")
+    print(f"{'Entry signals':<28} {s1['entries']:>10} {s2['entries']:>10} "
+          f"{s2['entries']-s1['entries']:>+10}")
+    print(f"{'Entry rate':<28} "
+          f"{100*s1['entries']/s1['total'] if s1['total'] else 0:>9.1f}% "
+          f"{100*s2['entries']/s2['total'] if s2['total'] else 0:>9.1f}% "
+          f"{100*(s2['entries']/s2['total']-s1['entries']/s1['total']) if s1['total'] and s2['total'] else 0:>+9.1f}%")
 
-    print(f"\nTotal impulses processed : {total}")
-    print(f"Entry signal generated   : {len(has_entry)}")
-    print(f"Rejected before entry    : {len(no_entry)}")
+    # Per-filter comparison
+    for fname in ["Baseline", "Base", "Loose"]:
+        f1 = s1["filter_stats"][fname]
+        f2 = s2["filter_stats"][fname]
+        print(f"\n  ── {fname} ──")
+        print(f"  {'Trades':<24} {f1['trades']:>10} {f2['trades']:>10} "
+              f"{f2['trades']-f1['trades']:>+10}")
+        print(f"  {'Wins':<24} {f1['wins']:>10} {f2['wins']:>10} "
+              f"{f2['wins']-f1['wins']:>+10}")
+        wr1 = f"{f1['win_rate']:.1f}%" if f1['trades'] else "-"
+        wr2 = f"{f2['win_rate']:.1f}%" if f2['trades'] else "-"
+        print(f"  {'WinRate':<24} {wr1:>10} {wr2:>10}")
+        ap1 = f"{f1['avg_pnl']:.1f}" if f1['trades'] else "-"
+        ap2 = f"{f2['avg_pnl']:.1f}" if f2['trades'] else "-"
+        print(f"  {'AvgPnL (pips)':<24} {ap1:>10} {ap2:>10}")
+        tp1 = f"{f1['tot_pnl']:.1f}" if f1['trades'] else "-"
+        tp2 = f"{f2['tot_pnl']:.1f}" if f2['trades'] else "-"
+        print(f"  {'TotPnL (pips)':<24} {tp1:>10} {tp2:>10}")
+        pf1 = f"{f1['pf']:.2f}" if f1['trades'] else "-"
+        pf2 = f"{f2['pf']:.2f}" if f2['trades'] else "-"
+        print(f"  {'PF':<24} {pf1:>10} {pf2:>10}")
 
-    # Reject breakdown
-    reject_counts: dict[str, int] = {}
-    for r in no_entry:
-        k = r.reject_stage or "UNKNOWN"
-        reject_counts[k] = reject_counts.get(k, 0) + 1
-    if reject_counts:
-        print("\n  Reject breakdown:")
-        for k, v in sorted(reject_counts.items(), key=lambda x: -x[1]):
-            print(f"    {k:<25} {v:>4}  ({100*v/total:.1f}%)")
+        # Exit reason distribution
+        all_reasons = sorted(set(list(f1["exit_reasons"].keys()) +
+                                 list(f2["exit_reasons"].keys())))
+        if all_reasons:
+            print(f"  Exit reasons:")
+            for er in all_reasons:
+                v1 = f1["exit_reasons"].get(er, 0)
+                v2 = f2["exit_reasons"].get(er, 0)
+                print(f"    {er:<22} {v1:>10} {v2:>10} {v2-v1:>+10}")
 
-    # Filter pass rates
-    print(f"\n{'Filter':<12} {'Pass':>5} {'Reject':>7} {'Rate':>7}")
-    print("-" * 35)
-    for name, attr in [("Baseline", "baseline_pass"),
-                       ("Base", "base_pass"),
-                       ("Loose", "loose_pass")]:
-        passes = sum(1 for r in has_entry if getattr(r, attr))
-        rejects = len(has_entry) - passes
-        rate = 100 * passes / len(has_entry) if has_entry else 0
-        print(f"{name:<12} {passes:>5} {rejects:>7} {rate:>6.1f}%")
+    # Reject stage comparison
+    all_reject = sorted(set(list(s1["reject_counts"].keys()) +
+                            list(s2["reject_counts"].keys())))
+    if all_reject:
+        print(f"\n  ── Reject Stage Comparison ──")
+        print(f"  {'Stage':<28} {'Phase1':>10} {'Phase2':>10} {'Delta':>10}")
+        print("  " + "-" * 60)
+        for stage in all_reject:
+            v1 = s1["reject_counts"].get(stage, 0)
+            v2 = s2["reject_counts"].get(stage, 0)
+            print(f"  {stage:<28} {v1:>10} {v2:>10} {v2-v1:>+10}")
 
-    # PnL stats per filter
-    print(f"\n{'Filter':<12} {'Trades':>7} {'Win':>5} {'WinRate':>8} "
-          f"{'AvgPnL':>8} {'TotPnL':>9} {'PF':>6}")
-    print("-" * 60)
-
-    for name, attr in [("Baseline", "baseline_pass"),
-                       ("Base", "base_pass"),
-                       ("Loose", "loose_pass")]:
-        trades = [r for r in has_entry if getattr(r, attr) and r.exit_reason]
-        if not trades:
-            print(f"{name:<12} {'0':>7} {'-':>5} {'-':>8} {'-':>8} {'-':>9} {'-':>6}")
-            continue
-
-        wins = [t for t in trades if t.pnl_pips > 0]
-        losses = [t for t in trades if t.pnl_pips <= 0]
-        win_rate = 100 * len(wins) / len(trades) if trades else 0
-        avg_pnl = np.mean([t.pnl_pips for t in trades])
-        tot_pnl = sum(t.pnl_pips for t in trades)
-        gross_win = sum(t.pnl_pips for t in wins) if wins else 0
-        gross_loss = abs(sum(t.pnl_pips for t in losses)) if losses else 0
-        pf = gross_win / gross_loss if gross_loss > 0 else float("inf")
-
-        print(f"{name:<12} {len(trades):>7} {len(wins):>5} {win_rate:>7.1f}% "
-              f"{avg_pnl:>8.1f} {tot_pnl:>9.1f} {pf:>6.2f}")
-
-    # ── CSV output ──
-    csv_path = os.path.join(script_dir, "sim_dat", "sim_results_fx.csv")
+    # ── CSV output (Phase 2) ──
+    csv_path = os.path.join(script_dir, "sim_dat", "sim_results_fx_p2.csv")
     rows = []
-    for r in results:
+    for r in p2:
         rows.append({
+            "Phase": "P2",
             "ImpulseTime": r.impulse_time,
             "Direction": "LONG" if r.direction == Dir.LONG else "SHORT",
             "RangePts": round(r.impulse.range_pts, 1),
@@ -959,8 +1200,7 @@ def main():
         })
     df_out = pd.DataFrame(rows)
     df_out.to_csv(csv_path, index=False)
-    print(f"\nCSV written: {csv_path}")
-    print(f"Rows: {len(df_out)}")
+    print(f"\nCSV written: {csv_path}  ({len(df_out)} rows)")
 
 
 if __name__ == "__main__":

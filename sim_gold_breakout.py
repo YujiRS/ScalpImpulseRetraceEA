@@ -50,6 +50,13 @@ BREAKEVEN_ATR_MULT = 1.0    # Move SL to entry when profit >= ATR * this
 # -- Spread filter
 MAX_SPREAD_MULT = 3.0       # Entry rejected if spread > median(15min) * this
 
+# -- Entry filters (added from filter analysis)
+EMA_FAST_PERIOD = 20        # M15 EMA fast period
+EMA_SLOW_PERIOD = 50        # M15 EMA slow period
+USE_EMA50_FILTER = True     # Require EMA20 > EMA50 for LONG (< for SHORT)
+MAX_EXCEED_ATR = 1.0        # Reject if breakout exceeds range by > this × ATR(M15)
+                            # 0 = disabled. 1.0 filters overextended breakouts.
+
 # -- ATR periods
 ATR_PERIOD_M15 = 14
 ATR_PERIOD_H1 = 14
@@ -235,7 +242,9 @@ def detect_daily_ranges(m15: pd.DataFrame, h1_atr: pd.Series) -> list[DailyRange
 # ═══════════════════════════════════════════════════════════════════════
 
 def detect_breakout_and_enter(dr: DailyRange, m15: pd.DataFrame,
-                               m15_atr: pd.Series, m1: pd.DataFrame) -> TradeResult:
+                               m15_atr: pd.Series, m1: pd.DataFrame,
+                               m15_ema_fast: Optional[pd.Series] = None,
+                               m15_ema_slow: Optional[pd.Series] = None) -> TradeResult:
     """Scan M15 bars after Asian session for breakout of daily range."""
     result = TradeResult(date=dr.date, daily_range=dr)
 
@@ -295,6 +304,21 @@ def detect_breakout_and_enter(dr: DailyRange, m15: pd.DataFrame,
                 result.reject_stage = "SPREAD_TOO_WIDE"
                 return result
 
+            # EMA50 trend filter: require EMA_fast > EMA_slow for LONG
+            if USE_EMA50_FILTER and m15_ema_fast is not None and m15_ema_slow is not None:
+                ef = m15_ema_fast.iloc[m15_atr.index.get_indexer([ts], method="ffill")[0]]
+                es = m15_ema_slow.iloc[m15_atr.index.get_indexer([ts], method="ffill")[0]]
+                if ef <= es:
+                    result.reject_stage = "EMA50_CONTRA"
+                    return result
+
+            # Exceed filter: reject if price overextended past range
+            if MAX_EXCEED_ATR > 0 and atr_val > 0:
+                exceed = c - rh
+                if exceed > atr_val * MAX_EXCEED_ATR:
+                    result.reject_stage = "EXCEED_TOO_FAR"
+                    return result
+
             result.direction = Dir.LONG
             result.entry_price = c
             result.entry_time = str(ts)
@@ -308,6 +332,21 @@ def detect_breakout_and_enter(dr: DailyRange, m15: pd.DataFrame,
             if spread_pts > median_spread_pts(m1, ts) * MAX_SPREAD_MULT:
                 result.reject_stage = "SPREAD_TOO_WIDE"
                 return result
+
+            # EMA50 trend filter: require EMA_fast < EMA_slow for SHORT
+            if USE_EMA50_FILTER and m15_ema_fast is not None and m15_ema_slow is not None:
+                ef = m15_ema_fast.iloc[m15_atr.index.get_indexer([ts], method="ffill")[0]]
+                es = m15_ema_slow.iloc[m15_atr.index.get_indexer([ts], method="ffill")[0]]
+                if ef >= es:
+                    result.reject_stage = "EMA50_CONTRA"
+                    return result
+
+            # Exceed filter: reject if price overextended past range
+            if MAX_EXCEED_ATR > 0 and atr_val > 0:
+                exceed = rl - c
+                if exceed > atr_val * MAX_EXCEED_ATR:
+                    result.reject_stage = "EXCEED_TOO_FAR"
+                    return result
 
             result.direction = Dir.SHORT
             result.entry_price = c
@@ -609,6 +648,8 @@ def main():
     print("[2] Computing indicators …")
     m15_atr = atr_series(m15, ATR_PERIOD_M15)
     h1_atr = atr_series(h1, ATR_PERIOD_H1)
+    m15_ema_fast = m15["close"].ewm(span=EMA_FAST_PERIOD, adjust=False).mean()
+    m15_ema_slow = m15["close"].ewm(span=EMA_SLOW_PERIOD, adjust=False).mean()
 
     # ── Range detection ──
     print("[3] Detecting daily Asian ranges …")
@@ -627,7 +668,8 @@ def main():
     results: list[TradeResult] = []
 
     for dr in ranges:
-        tr = detect_breakout_and_enter(dr, m15, m15_atr, m1)
+        tr = detect_breakout_and_enter(dr, m15, m15_atr, m1,
+                                       m15_ema_fast, m15_ema_slow)
         if tr.entry_price > 0:
             simulate_exit(tr, m15, m15_atr)
         results.append(tr)

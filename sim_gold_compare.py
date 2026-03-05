@@ -18,7 +18,7 @@ from sim_gold_breakout import (
     detect_daily_ranges, detect_breakout_and_enter, collect_stats,
     Dir, TradeResult,
     ATR_PERIOD_M15, ATR_PERIOD_H1, FORCE_CLOSE_HOUR, TRAIL_ATR_MULT,
-    BREAKEVEN_ATR_MULT,
+    BREAKEVEN_ATR_MULT, EMA_FAST_PERIOD, EMA_SLOW_PERIOD,
 )
 
 
@@ -252,13 +252,16 @@ def main():
     h1 = resample_ohlc(m1, "60min")
     m15_atr = atr_series(m15, ATR_PERIOD_M15)
     h1_atr = atr_series(h1, ATR_PERIOD_H1)
+    m15_ema_fast = m15["close"].ewm(span=EMA_FAST_PERIOD, adjust=False).mean()
+    m15_ema_slow = m15["close"].ewm(span=EMA_SLOW_PERIOD, adjust=False).mean()
 
     # ── Generate entry signals (shared across all variants) ──
     print("[2] Generating entry signals …")
     ranges = detect_daily_ranges(m15, h1_atr)
     base_results = []
     for dr in ranges:
-        tr = detect_breakout_and_enter(dr, m15, m15_atr, m1)
+        tr = detect_breakout_and_enter(dr, m15, m15_atr, m1,
+                                       m15_ema_fast, m15_ema_slow)
         base_results.append(tr)
 
     traded = sum(1 for r in base_results if r.entry_price > 0)

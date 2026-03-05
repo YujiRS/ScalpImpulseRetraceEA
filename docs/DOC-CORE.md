@@ -1164,8 +1164,9 @@ TPExtRatio は EntryGate の RangeCost評価（第9.5.2章）における理論T
 * UseMarketFallback（default: true）
 * LotMode（default: FIXED）
   * FIXED：固定Lot
-  * RISK\_PERCENT：口座％リスク型（将来実装）
+  * RISK\_PERCENT：口座％リスク型
 * FixedLot（default: 0.01）
+* RiskPercent（default: 1.0）  ※ RISK\_PERCENT時の口座残高リスク％。Lot = (Balance × RiskPercent%) / (SL距離pts × 1ptあたり価値)。lotStep切り捨て・min/maxクランプ適用。
 * LogLevel（default: NORMAL）
 * RunId（default: 01）         ※ログ命名用
   ※ LogLevel / RunId を含むログ制御仕様（出力レベル・命名規則・Dump/Log系Inputの意味）は

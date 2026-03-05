@@ -27,6 +27,7 @@ input bool              UseLimitEntry          = true;           // UseLimitEntr
 input bool              UseMarketFallback      = true;           // UseMarketFallback
 input ENUM_LOT_MODE     LotMode                = LOT_MODE_FIXED; // LotMode
 input double            FixedLot               = 0.01;           // FixedLot
+input double            RiskPercent            = 1.0;            // RiskPercent (口座残高の%)
 input ENUM_LOG_LEVEL    LogLevel               = LOG_LEVEL_NORMAL; // LogLevel
 input int               RunId                  = 1;              // RunId
 

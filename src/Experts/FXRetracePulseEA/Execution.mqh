@@ -95,7 +95,9 @@ bool ExecuteEntry()
 
    request.action    = TRADE_ACTION_DEAL;
    request.symbol    = Symbol();
-   request.volume    = FixedLot;
+   request.volume    = (LotMode == LOT_MODE_RISK_PERCENT)
+                       ? CalcRiskPercentLot(price, g_sl)
+                       : FixedLot;
    request.type      = orderType;
    request.price     = price;
    request.sl        = g_sl;

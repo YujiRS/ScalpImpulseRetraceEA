@@ -117,4 +117,35 @@ void PreviewSLTP(double entryPrice, double &outSL, double &outTP)
    outSL = (g_impulseDir == DIR_LONG) ? (g_impulseStart - atr * mult) : (g_impulseStart + atr * mult);
 }
 
+//+------------------------------------------------------------------+
+//| ロット計算: RISK_PERCENT モード                                     |
+//| Lot = (Balance × RiskPercent%) / (SL距離points × 1pointあたり価値)  |
+//+------------------------------------------------------------------+
+double CalcRiskPercentLot(double entryPrice, double slPrice)
+{
+   double riskAmount = AccountInfoDouble(ACCOUNT_BALANCE) * RiskPercent / 100.0;
+   double slDistPts  = MathAbs(entryPrice - slPrice) / _Point;
+
+   if(slDistPts <= 0)
+      return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+
+   double tickValue  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize   = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double pointValue = tickValue * (_Point / tickSize);
+
+   if(pointValue <= 0)
+      return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+
+   double rawLot  = riskAmount / (slDistPts * pointValue);
+
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+
+   rawLot = MathMax(minLot, MathMin(maxLot, rawLot));
+   rawLot = MathFloor(rawLot / lotStep) * lotStep;
+
+   return NormalizeDouble(rawLot, 8);
+}
+
 #endif // __RISK_MANAGER_MQH__

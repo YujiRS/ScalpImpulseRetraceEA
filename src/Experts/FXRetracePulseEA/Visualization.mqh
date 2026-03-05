@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //| Visualization.mqh                                                 |
-//| Fib描画・押し帯描画（第16章）                                        |
+//| FX専用: Fib描画・押し帯描画                                         |
 //+------------------------------------------------------------------+
 #ifndef __VISUALIZATION_MQH__
 #define __VISUALIZATION_MQH__
 
 //+------------------------------------------------------------------+
-//| Fib Visualization（第16章）                                       |
+//| Fib Visualization                                                |
 //+------------------------------------------------------------------+
 string BuildFibObjName(const string trade_uuid)
 {
@@ -39,19 +39,6 @@ void PurgeOldFibObjectsExcept(const string keepFibName, const string keepBandNam
    }
 }
 
-color GetBandColorForMarket(ENUM_MARKET_MODE mode)
-{
-   // 仕様書推奨: FX=Blue系, GOLD=Gold系, CRYPTO=Purple系（透明度は60%推奨）
-   // 実装: ARGBで半透明
-   switch(mode)
-   {
-      case MARKET_MODE_GOLD:   return (color)ColorToARGB(clrGold, 150);
-      case MARKET_MODE_CRYPTO: return (color)ColorToARGB(clrPurple, 150);
-      case MARKET_MODE_FX:
-      default:                 return (color)ColorToARGB(clrDodgerBlue, 150);
-   }
-}
-
 void CreateFibVisualization()
 {
    if(!EnableFibVisualization) return;
@@ -63,8 +50,8 @@ void CreateFibVisualization()
    g_fibObjName = fibName;
    g_bandObjName = bandName;
 
-   // --- 追加：新規作成前に、現在のUUID以外のゴミを掃除する ---
-   PurgeOldFibObjectsExcept(fibName, bandName); 
+   // 新規作成前に、現在のUUID以外のゴミを掃除する
+   PurgeOldFibObjectsExcept(fibName, bandName);
 
    if(ObjectFind(0, fibName) < 0)
    {
@@ -106,19 +93,8 @@ void CreateFibVisualization()
 
    if(ObjectFind(0, bandName) < 0)
    {
-      double bandUpper = 0.0;
-      double bandLower = 0.0;
-
-      if(g_resolvedMarketMode == MARKET_MODE_GOLD && g_goldDeepBandON && g_deepBandUpper > 0 && g_deepBandLower > 0)
-      {
-         bandUpper = g_deepBandUpper;
-         bandLower = g_deepBandLower;
-      }
-      else if(g_primaryBandUpper > 0 && g_primaryBandLower > 0)
-      {
-         bandUpper = g_primaryBandUpper;
-         bandLower = g_primaryBandLower;
-      }
+      double bandUpper = g_primaryBandUpper;
+      double bandLower = g_primaryBandLower;
 
       if(bandUpper > 0 && bandLower > 0)
       {
@@ -142,7 +118,7 @@ void CreateFibVisualization()
             ObjectSetInteger(0, bandName, OBJPROP_FILL, true);
             ObjectSetInteger(0, bandName, OBJPROP_SELECTABLE, true);
             ObjectSetInteger(0, bandName, OBJPROP_HIDDEN, false);
-            ObjectSetInteger(0, bandName, OBJPROP_COLOR, GetBandColorForMarket(g_resolvedMarketMode));
+            ObjectSetInteger(0, bandName, OBJPROP_COLOR, (color)ColorToARGB(clrDodgerBlue, 150));
          }
       }
    }

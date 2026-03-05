@@ -586,7 +586,7 @@ def print_results(results: list[TradeResult]):
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     data_path = os.path.join(script_dir, "sim_dat",
-                             "GOLD#_M1_202602020100_202602132357.csv")
+                             "GOLD#_M1_202509010100_202511282139.csv")
 
     if not os.path.exists(data_path):
         print(f"ERROR: Data file not found: {data_path}")

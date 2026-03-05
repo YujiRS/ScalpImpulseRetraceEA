@@ -189,6 +189,9 @@ string            g_logFileName        = "";
 datetime          g_lastBarTime        = 0;
 bool              g_newBar             = false;
 
+// OnDeinit reason（TF変更検出用）
+int               g_deinitReason       = -1;
+
 // FreezeCancel後の再監視フラグ
 bool              g_freezeCancelled    = false;
 
@@ -857,10 +860,22 @@ int OnInit()
 
    LoggerInit();
 
-   g_currentState = STATE_IDLE;
-   g_lastBarTime = 0;
+   // TF変更時: ステート維持（ハンドルは上で再作成済み）
+   // それ以外（初回起動・パラメータ変更等）: 全リセット
+   if(g_deinitReason == REASON_CHARTCHANGE)
+   {
+      Print(EA_NAME, " re-initialized (TF change). State preserved: ", StateToString(g_currentState));
+      g_lastBarTime = 0;
+   }
+   else
+   {
+      ResetAllState();
+      g_currentState = STATE_IDLE;
+      g_lastBarTime = 0;
+      Print(EA_NAME, " initialized. Mode=FX");
+   }
 
-   Print(EA_NAME, " initialized. Mode=FX");
+   g_deinitReason = -1;
 
    return INIT_SUCCEEDED;
 }
@@ -870,6 +885,8 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   g_deinitReason = reason;
+
    LoggerDeinit();
 
    if(reason != REASON_CHARTCHANGE)

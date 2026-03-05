@@ -59,6 +59,13 @@ input double ReversalBigBodyMult_CRYPTO  = 0.9;    // CRYPTO ATR(H1)*mult
 input bool   ReversalWickReject_Enable_GOLD = true;
 input double ReversalWickRatioMin_GOLD   = 0.60;
 
+// === EMA Cross Filter (EMA20 vs EMA50 position) ===
+input bool   EMACrossFilter_Enable_GOLD    = true;    // GOLD: EMA20>EMA50=LONG, EMA20<EMA50=SHORT
+input int    EMACrossFilter_FastPeriod_GOLD = 20;     // GOLD: EMA Fast period for cross filter
+// === Impulse Exceed Filter (overextension guard) ===
+input bool   ImpulseExceed_Enable_GOLD     = true;    // GOLD: Reject if impulse > MaxExceedATR × ATR(M15)
+input double ImpulseExceed_MaxATR_GOLD     = 3.0;     // GOLD: Max impulse range in ATR(M15) units
+
 input bool              EnableFibVisualization = true;           // EnableFibVisualization
 
 // 【G2：安全弁（事故防止）】
@@ -449,6 +456,20 @@ void Process_IDLE()
       if(!EvaluateTrendFilterAndGuard(rejectStage))
       {
          g_stats.FinalState  = "TREND_FILTER_REJECT";
+         g_stats.RejectStage = rejectStage;
+
+         WriteLog(LOG_REJECT, "", rejectStage);
+         DumpImpulseSummary();
+
+         g_stats.Reset();
+         g_tradeUUID = "";
+         return;
+      }
+
+      // === Impulse Exceed Filter (overextension guard) ===
+      if(!EvaluateImpulseExceedFilter(rejectStage))
+      {
+         g_stats.FinalState  = "IMPULSE_EXCEED_REJECT";
          g_stats.RejectStage = rejectStage;
 
          WriteLog(LOG_REJECT, "", rejectStage);

@@ -231,6 +231,19 @@ struct ImpulseStats
    int        ReversalGuardTriggered; // 1/0, 未評価は-1
    string     ReversalReason;
 
+   // === EMA Cross Filter ===
+   int        EMACrossFilterEnable;   // 1/0, 未評価は-1
+   double     EMACrossFastVal;        // EMA(Fast) value at evaluation
+   double     EMACrossSlowVal;        // EMA(50) value at evaluation
+   string     EMACrossDir;            // "LONG" / "SHORT" / "FLAT"
+   int        EMACrossAligned;        // 1/0, 未評価は-1
+
+   // === Impulse Exceed Filter ===
+   int        ImpulseExceedEnable;    // 1/0, 未評価は-1
+   double     ImpulseRangeATR;        // ImpulseRange / ATR(M15) ratio
+   double     ImpulseExceedMax;       // Max threshold
+   int        ImpulseExceedTriggered; // 1/0, 未評価は-1
+
    void Reset()
    {
       StartTime = TimeCurrent();
@@ -301,6 +314,17 @@ struct ImpulseStats
       ReversalTF = "";
       ReversalGuardTriggered = -1;
       ReversalReason = "";
+
+      EMACrossFilterEnable = -1;
+      EMACrossFastVal = 0;
+      EMACrossSlowVal = 0;
+      EMACrossDir = "";
+      EMACrossAligned = -1;
+
+      ImpulseExceedEnable = -1;
+      ImpulseRangeATR = 0;
+      ImpulseExceedMax = 0;
+      ImpulseExceedTriggered = -1;
    }
 };
 

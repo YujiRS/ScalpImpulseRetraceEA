@@ -394,6 +394,44 @@ bool EvaluateTrendFilterAndGuard(string &rejectStageOut)
       return false;
    }
 
+   // ── EMA Cross Filter (EMA20 vs EMA50 position) ── GOLD only
+   if(g_resolvedMarketMode == MARKET_MODE_GOLD && EMACrossFilter_Enable_GOLD)
+   {
+      g_stats.EMACrossFilterEnable = 1;
+
+      double emaFast = GetMAValue(sym, PERIOD_M15, EMACrossFilter_FastPeriod_GOLD,
+                                  MODE_EMA, PRICE_CLOSE, 1);
+      g_stats.EMACrossFastVal = emaFast;
+      g_stats.EMACrossSlowVal = ema50_1;
+
+      if(emaFast == EMPTY_VALUE)
+      {
+         g_stats.EMACrossDir = "FLAT";
+         g_stats.EMACrossAligned = 0;
+         rejectStageOut = "EMA_CROSS_NODATA";
+         return false;
+      }
+
+      string crossDir = "FLAT";
+      if(emaFast > ema50_1)       crossDir = "LONG";
+      else if(emaFast < ema50_1)  crossDir = "SHORT";
+
+      g_stats.EMACrossDir = crossDir;
+
+      bool crossAligned = IsAlignedWithImpulse(crossDir);
+      g_stats.EMACrossAligned = crossAligned ? 1 : 0;
+
+      if(!crossAligned)
+      {
+         rejectStageOut = "EMA_CROSS_MISMATCH";
+         return false;
+      }
+   }
+   else
+   {
+      g_stats.EMACrossFilterEnable = 0;
+   }
+
    if(!ReversalGuard_Enable)
    {
       g_stats.ReversalGuardTriggered = 0;
@@ -453,6 +491,47 @@ bool EvaluateTrendFilterAndGuard(string &rejectStageOut)
    }
 
    g_stats.ReversalGuardTriggered = 0;
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Impulse Exceed Filter (overextension guard)                      |
+//| Impulse range が ATR(M15) × 閾値 を超えたらリジェクト             |
+//+------------------------------------------------------------------+
+bool EvaluateImpulseExceedFilter(string &rejectStageOut)
+{
+   // GOLD only (他市場は将来拡張用にスキップ)
+   if(g_resolvedMarketMode != MARKET_MODE_GOLD || !ImpulseExceed_Enable_GOLD)
+   {
+      g_stats.ImpulseExceedEnable = 0;
+      return true;
+   }
+
+   g_stats.ImpulseExceedEnable = 1;
+   g_stats.ImpulseExceedMax = ImpulseExceed_MaxATR_GOLD;
+
+   string sym = Symbol();
+   double atr15 = GetATRValue(sym, PERIOD_M15, 14, 1);
+
+   if(atr15 == EMPTY_VALUE || atr15 <= 0)
+   {
+      g_stats.ImpulseExceedTriggered = 0;
+      return true;  // データ不足時はパス
+   }
+
+   double impulseRange = MathAbs(g_impulseEnd - g_impulseStart);
+   double ratio = impulseRange / atr15;
+
+   g_stats.ImpulseRangeATR = ratio;
+
+   if(ratio > ImpulseExceed_MaxATR_GOLD)
+   {
+      g_stats.ImpulseExceedTriggered = 1;
+      rejectStageOut = "IMPULSE_EXCEED";
+      return false;
+   }
+
+   g_stats.ImpulseExceedTriggered = 0;
    return true;
 }
 

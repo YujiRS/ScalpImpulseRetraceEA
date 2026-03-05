@@ -111,7 +111,12 @@ void DumpImpulseSummary()
          // --- TrendFilter / ReversalGuard（後方互換：末尾追加）
          "TrendFilterEnable", "TrendTF", "TrendMethod", "TrendDir",
          "TrendSlope", "TrendSlopeMin", "TrendATRFloor", "TrendAligned",
-         "ReversalGuardEnable", "ReversalTF", "ReversalGuardTriggered", "ReversalReason"
+         "ReversalGuardEnable", "ReversalTF", "ReversalGuardTriggered", "ReversalReason",
+
+         // --- EMA Cross Filter / Impulse Exceed Filter（後方互換：末尾追加）
+         "EMACrossFilterEnable", "EMACrossFastVal", "EMACrossSlowVal",
+         "EMACrossDir", "EMACrossAligned",
+         "ImpulseExceedEnable", "ImpulseRangeATR", "ImpulseExceedMax", "ImpulseExceedTriggered"
       );
    }
 
@@ -184,7 +189,18 @@ void DumpImpulseSummary()
       (g_stats.ReversalGuardEnable>=0) ? IntegerToString(g_stats.ReversalGuardEnable) : "",
       g_stats.ReversalTF,
       (g_stats.ReversalGuardTriggered>=0) ? IntegerToString(g_stats.ReversalGuardTriggered) : "",
-      g_stats.ReversalReason
+      g_stats.ReversalReason,
+
+      // --- EMA Cross Filter / Impulse Exceed Filter
+      (g_stats.EMACrossFilterEnable>=0) ? IntegerToString(g_stats.EMACrossFilterEnable) : "",
+      g_stats.EMACrossFastVal,
+      g_stats.EMACrossSlowVal,
+      g_stats.EMACrossDir,
+      (g_stats.EMACrossAligned>=0) ? IntegerToString(g_stats.EMACrossAligned) : "",
+      (g_stats.ImpulseExceedEnable>=0) ? IntegerToString(g_stats.ImpulseExceedEnable) : "",
+      g_stats.ImpulseRangeATR,
+      g_stats.ImpulseExceedMax,
+      (g_stats.ImpulseExceedTriggered>=0) ? IntegerToString(g_stats.ImpulseExceedTriggered) : ""
    );
 
    FileClose(handle);

@@ -39,17 +39,10 @@ void PurgeOldFibObjectsExcept(const string keepFibName, const string keepBandNam
    }
 }
 
-color GetBandColorForMarket(ENUM_MARKET_MODE mode)
+color GetBandColor()
 {
-   // 仕様書推奨: FX=Blue系, GOLD=Gold系, CRYPTO=Purple系（透明度は60%推奨）
-   // 実装: ARGBで半透明
-   switch(mode)
-   {
-      case MARKET_MODE_GOLD:   return (color)ColorToARGB(clrGold, 150);
-      case MARKET_MODE_CRYPTO: return (color)ColorToARGB(clrPurple, 150);
-      case MARKET_MODE_FX:
-      default:                 return (color)ColorToARGB(clrDodgerBlue, 150);
-   }
+   // GOLD専用: Gold系（透明度60%推奨）
+   return (color)ColorToARGB(clrGold, 150);
 }
 
 void CreateFibVisualization()
@@ -109,7 +102,7 @@ void CreateFibVisualization()
       double bandUpper = 0.0;
       double bandLower = 0.0;
 
-      if(g_resolvedMarketMode == MARKET_MODE_GOLD && g_goldDeepBandON && g_deepBandUpper > 0 && g_deepBandLower > 0)
+      if(g_goldDeepBandON && g_deepBandUpper > 0 && g_deepBandLower > 0)
       {
          bandUpper = g_deepBandUpper;
          bandLower = g_deepBandLower;
@@ -142,7 +135,7 @@ void CreateFibVisualization()
             ObjectSetInteger(0, bandName, OBJPROP_FILL, true);
             ObjectSetInteger(0, bandName, OBJPROP_SELECTABLE, true);
             ObjectSetInteger(0, bandName, OBJPROP_HIDDEN, false);
-            ObjectSetInteger(0, bandName, OBJPROP_COLOR, GetBandColorForMarket(g_resolvedMarketMode));
+            ObjectSetInteger(0, bandName, OBJPROP_COLOR, GetBandColor());
          }
       }
    }

@@ -180,7 +180,6 @@ int ProcessTouches()
 {
    double leaveDistPrimary = g_effectiveBandWidthPts * g_profile.leaveDistanceMult;
    double leaveDistDeep    = g_effectiveBandWidthPts * g_profile.leaveDistanceMult;
-   double leaveDistOpt38   = g_effectiveBandWidthPts * g_profile.leaveDistanceMult;
 
    // --- Primary Band ---
    if(g_primaryBandUpper > 0 && g_primaryBandLower > 0)
@@ -199,16 +198,6 @@ int ProcessTouches()
          g_deepBandUpper, g_deepBandLower, leaveDistDeep,
          g_touchCount_Deep, g_inBand_Deep,
          g_leaveEstablished_Deep, g_leaveBarCount_Deep, 1);
-      if(result >= 0) return result;
-   }
-
-   // --- Optional 38.2 Band ---
-   if(g_optBand38Upper > 0 && g_optBand38Lower > 0 && g_profile.optionalBand38)
-   {
-      int result = ProcessSingleBandTouch(
-         g_optBand38Upper, g_optBand38Lower, leaveDistOpt38,
-         g_touchCount_Opt38, g_inBand_Opt38,
-         g_leaveEstablished_Opt38, g_leaveBarCount_Opt38, 2);
       if(result >= 0) return result;
    }
 

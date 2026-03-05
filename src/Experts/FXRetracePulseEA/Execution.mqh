@@ -36,6 +36,19 @@ bool IsSpreadOK()
 }
 
 //+------------------------------------------------------------------+
+//| Filling Mode 自動判定                                              |
+//+------------------------------------------------------------------+
+ENUM_ORDER_TYPE_FILLING GetFillingMode()
+{
+   long fillMode = SymbolInfoInteger(Symbol(), SYMBOL_FILLING_MODE);
+   if((fillMode & SYMBOL_FILLING_FOK) != 0)
+      return ORDER_FILLING_FOK;
+   if((fillMode & SYMBOL_FILLING_IOC) != 0)
+      return ORDER_FILLING_IOC;
+   return ORDER_FILLING_RETURN;
+}
+
+//+------------------------------------------------------------------+
 //| Execution（第8章）                                                 |
 //+------------------------------------------------------------------+
 bool ExecuteEntry()
@@ -103,8 +116,9 @@ bool ExecuteEntry()
    request.sl        = g_sl;
    request.tp        = g_tp;
    request.deviation = (ulong)(g_profile.maxSlippagePts / Point());
-   request.magic     = 20260101; // Magic Number固定
-   request.comment   = EA_NAME + " " + g_tradeUUID;
+   request.magic        = 20260101; // Magic Number固定
+   request.comment      = EA_NAME + " " + g_tradeUUID;
+   request.type_filling = GetFillingMode();
 
    if(!OrderSend(request, result))
    {
@@ -151,10 +165,11 @@ void ClosePosition(string reason, string extraInfo = "")
    MqlTradeRequest request = {};
    MqlTradeResult  result  = {};
 
-   request.action   = TRADE_ACTION_DEAL;
-   request.symbol   = Symbol();
-   request.volume   = PositionGetDouble(POSITION_VOLUME);
-   request.deviation = (ulong)(g_profile.maxSlippagePts / Point());
+   request.action       = TRADE_ACTION_DEAL;
+   request.symbol       = Symbol();
+   request.volume       = PositionGetDouble(POSITION_VOLUME);
+   request.deviation    = (ulong)(g_profile.maxSlippagePts / Point());
+   request.type_filling = GetFillingMode();
 
    if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
    {

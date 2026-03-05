@@ -4,7 +4,7 @@
 sim_results_fx_p2.csv の Base filter (PF2.51, WR13%, 5W/33L) を再現する。
 
 ## 変更1: Touch1 即エントリー（Touch2 廃止）
-**ファイル**: `ScalpImpulseRetraceEA.mq5`
+**ファイル**: `GoldBreakoutFilterEA.mq5`
 
 - `Process_FIB_ACTIVE()` で Touch1 検出時、STATE_TOUCH_1 をスキップして
   直接 STATE_TOUCH_2_WAIT_CONFIRM へ遷移（Confirm 待ちへ直行）
@@ -17,7 +17,7 @@ sim_results_fx_p2.csv の Base filter (PF2.51, WR13%, 5W/33L) を再現する。
 ```
 
 ## 変更2: pre-entry StructBreak 無効化（FX）
-**ファイル**: `ScalpImpulseRetraceEA.mq5`
+**ファイル**: `GoldBreakoutFilterEA.mq5`
 
 - `Process_FIB_ACTIVE()` 内の `CheckStructureInvalid_Detail()` を FX では無効化
 - `Process_TOUCH_2_WAIT_CONFIRM()` 内も同様
@@ -33,7 +33,7 @@ if(g_resolvedMarketMode != MARKET_MODE_FX)  // FX以外のみStructBreak
 ```
 
 ## 変更3: M5 slope フィルター追加
-**ファイル**: `EntryEngine.mqh`, `Constants.mqh`, `ScalpImpulseRetraceEA.mq5`
+**ファイル**: `EntryEngine.mqh`, `Constants.mqh`, `GoldBreakoutFilterEA.mq5`
 
 sim の Base filter = M5 SMA(21) slope を STRONG のみ通過。
 
@@ -78,7 +78,7 @@ if(g_resolvedMarketMode == MARKET_MODE_FX && trendDir == "FLAT")
 ```
 
 ## 変更5: FX 専用化
-**ファイル**: `MarketProfile.mqh` or `ScalpImpulseRetraceEA.mq5`
+**ファイル**: `MarketProfile.mqh` or `GoldBreakoutFilterEA.mq5`
 
 - GOLD/CRYPTO モード時は OnInit() で警告ログ出力
 - エントリーロジック自体は動く（壊さない）が、M5 フィルターの
@@ -88,7 +88,7 @@ if(g_resolvedMarketMode == MARKET_MODE_FX && trendDir == "FLAT")
 ## 修正順序
 1. Constants.mqh（M5 slope enum 追加）
 2. EntryEngine.mqh（M15 FLAT 通過 + M5 slope フィルター関数）
-3. ScalpImpulseRetraceEA.mq5:
+3. GoldBreakoutFilterEA.mq5:
    - OnInit: M5 ハンドル追加
    - Process_IDLE: M5 フィルター呼び出し
    - Process_FIB_ACTIVE: Touch1→直接Confirm待ち（FX）

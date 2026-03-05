@@ -1,4 +1,4 @@
-# **EAコード仕様書：ScalpImpulseRetraceEA v1.0（設計書）**
+# **EAコード仕様書：GoldBreakoutFilterEA v2.0（設計書）**
 
 ## **0\. 目的**
 
@@ -1323,17 +1323,17 @@ IMPULSE\_FOUND 発生時（Impulse通知）：
 
 形式：
 
-\[ScaEA\] IMPULSE
+\[GbfEA\] IMPULSE
 
 例：
 
-\[ScaEA\] XAUUSD LONG IMPULSE
+\[GbfEA\] XAUUSD LONG IMPULSE
 
 ---
 
 ### 14.6 本文（固定）
 
-EA      : ScaEA Symbol : Event : IMPULSE Side : State : IMPULSE\_FOUND Time : 
+EA      : GbfEA Symbol : Event : IMPULSE Side : State : IMPULSE\_FOUND Time : 
 
 ---
 

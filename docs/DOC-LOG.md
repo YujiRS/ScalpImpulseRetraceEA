@@ -2,7 +2,7 @@
 
 ## 0\. 位置づけ（正典宣言）
 
-本書 **EA\_LogSpec\_v202603（DOC-LOG）** は、ScalpImpulseRetraceEA における **ログ仕様の唯一の正典**である。
+本書 **EA\_LogSpec\_v202603（DOC-LOG）** は、GoldBreakoutFilterEA における **ログ仕様の唯一の正典**である。
 
 - 対象：Eventログ（実行ログ）／ImpulseSummary（解析ログ）  
 - 本書で定義する：列定義、命名規則、出力条件、RejectStage語彙、拡張方針（後方互換）  
@@ -89,12 +89,12 @@ LogLevel により出力範囲を制御する。
 
 ### 2.5 ログファイル命名規則（固定）
 
-`ScaEA_{RunId}_{Symbol}.tsv`
+`GbfEA_{RunId}_{Symbol}.tsv`
 
 - RunId は実行日を表す `YYYYMMDD` とする（固定）  
-- プレフィックス `ScaEA_` と拡張子 `.tsv` は固定
+- プレフィックス `GbfEA_` と拡張子 `.tsv` は固定
 
-例：`ScaEA_20260223_USDJPY.tsv`
+例：`GbfEA_20260223_USDJPY.tsv`
 
 ### 2.6 列拡張方針（後方互換）
 
@@ -122,12 +122,12 @@ ImpulseSummaryログは、1Impulse=1行で集計用に出力する。
 
 ### 3.2 ファイル命名規則
 
-`ScaEA_SUMMARY_{RunId}_{Symbol}.tsv`
+`GbfEA_SUMMARY_{RunId}_{Symbol}.tsv`
 
 - RunId は 2.5 と同一の `YYYYMMDD` を使用する（固定）  
-- プレフィックス `ScaEA_` と拡張子 `.tsv` は固定
+- プレフィックス `GbfEA_` と拡張子 `.tsv` は固定
 
-例：`ScaEA_SUMMARY_20260223_USDJPY.tsv`
+例：`GbfEA_SUMMARY_20260223_USDJPY.tsv`
 
 ### 3.3 出力形式（TSV固定列順）
 
@@ -465,9 +465,9 @@ LogLevel により出力範囲を制御する。
 
 ## 13.5 ログファイル命名規則（固定）
 
-`ScaEA_{RunId}_{Symbol}.tsv`
+`GbfEA_{RunId}_{Symbol}.tsv`
 
-例： `ScaEA_01_USDJPY.tsv`
+例： `GbfEA_01_USDJPY.tsv`
 
 ---
 
@@ -506,7 +506,7 @@ ImpulseSummaryログは、1Impulse=1行で集計用に出力する。
 
 ### 13.9.2 ファイル命名規則
 
-`ScaEA_SUMMARY_{Symbol}.tsv`
+`GbfEA_SUMMARY_{Symbol}.tsv`
 
 ---
 

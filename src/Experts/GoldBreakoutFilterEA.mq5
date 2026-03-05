@@ -1,13 +1,12 @@
 //+------------------------------------------------------------------+
-//| ScalpImpulseRetraceEA.mq5                                        |
-//| ScalpImpulseRetraceEA v1.6                                       |
-//| EMA Cross Exit + RR Gate廃止 (CHANGE-008)                         |
-//| GOLD Confirm OR + TPExt(CHANGE-007)                              |
-//| TP Extension(CHANGE-006) + EntryGate市場別化(CHANGE-005)          |
+//| GoldBreakoutFilterEA.mq5                                         |
+//| GoldBreakoutFilterEA v2.0                                        |
+//| EMA Cross Filter + Impulse Exceed Filter (GOLD特化)              |
+//| Based on ScalpImpulseRetraceEA v1.6                              |
 //+------------------------------------------------------------------+
-#property copyright "ScalpImpulseRetraceEA"
+#property copyright "GoldBreakoutFilterEA"
 #property link      ""
-#property version   "1.60"
+#property version   "2.00"
 #property strict
 
 //+------------------------------------------------------------------+
@@ -16,7 +15,7 @@
 //|          → FibEngine → EntryEngine → RiskManager → Execution      |
 //|          → Notification → Visualization                            |
 //+------------------------------------------------------------------+
-#include "ScalpImpulseRetraceEA/Constants.mqh"
+#include "GoldBreakoutFilterEA/Constants.mqh"
 
 //+------------------------------------------------------------------+
 //| Inputs（第12章：グルーピングと初期値）                               |
@@ -264,15 +263,15 @@ int               g_freezeConfirmedBarShift = 0;
 //| Remaining Module Includes                                          |
 //| (グローバル変数定義後にInclude)                                      |
 //+------------------------------------------------------------------+
-#include "ScalpImpulseRetraceEA/Logger.mqh"
-#include "ScalpImpulseRetraceEA/MarketProfile.mqh"
-#include "ScalpImpulseRetraceEA/ImpulseDetector.mqh"
-#include "ScalpImpulseRetraceEA/FibEngine.mqh"
-#include "ScalpImpulseRetraceEA/EntryEngine.mqh"
-#include "ScalpImpulseRetraceEA/RiskManager.mqh"
-#include "ScalpImpulseRetraceEA/Execution.mqh"
-#include "ScalpImpulseRetraceEA/Notification.mqh"
-#include "ScalpImpulseRetraceEA/Visualization.mqh"
+#include "GoldBreakoutFilterEA/Logger.mqh"
+#include "GoldBreakoutFilterEA/MarketProfile.mqh"
+#include "GoldBreakoutFilterEA/ImpulseDetector.mqh"
+#include "GoldBreakoutFilterEA/FibEngine.mqh"
+#include "GoldBreakoutFilterEA/EntryEngine.mqh"
+#include "GoldBreakoutFilterEA/RiskManager.mqh"
+#include "GoldBreakoutFilterEA/Execution.mqh"
+#include "GoldBreakoutFilterEA/Notification.mqh"
+#include "GoldBreakoutFilterEA/Visualization.mqh"
 
 //+------------------------------------------------------------------+
 //| 新しいバー検出                                                     |

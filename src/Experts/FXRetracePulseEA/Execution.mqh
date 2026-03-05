@@ -6,6 +6,21 @@
 #define __EXECUTION_MQH__
 
 //+------------------------------------------------------------------+
+//| FillingMode自動判定                                                |
+//+------------------------------------------------------------------+
+ENUM_ORDER_TYPE_FILLING GetFillingMode()
+{
+   long fillFlags = SymbolInfoInteger(Symbol(), SYMBOL_FILLING_MODE);
+
+   if((fillFlags & SYMBOL_FILLING_FOK) != 0)
+      return ORDER_FILLING_FOK;
+   if((fillFlags & SYMBOL_FILLING_IOC) != 0)
+      return ORDER_FILLING_IOC;
+
+   return ORDER_FILLING_RETURN;
+}
+
+//+------------------------------------------------------------------+
 //| Spread取得・計算（第12.3章）                                        |
 //+------------------------------------------------------------------+
 double GetCurrentSpreadPts()
@@ -93,18 +108,19 @@ bool ExecuteEntry()
    MqlTradeRequest request = {};
    MqlTradeResult  result  = {};
 
-   request.action    = TRADE_ACTION_DEAL;
-   request.symbol    = Symbol();
-   request.volume    = (LotMode == LOT_MODE_RISK_PERCENT)
-                       ? CalcRiskPercentLot(price, g_sl)
-                       : FixedLot;
-   request.type      = orderType;
-   request.price     = price;
-   request.sl        = g_sl;
-   request.tp        = g_tp;
-   request.deviation = (ulong)(g_profile.maxSlippagePts / Point());
-   request.magic     = 20260101; // Magic Number固定
-   request.comment   = EA_NAME + " " + g_tradeUUID;
+   request.action       = TRADE_ACTION_DEAL;
+   request.symbol       = Symbol();
+   request.volume       = (LotMode == LOT_MODE_RISK_PERCENT)
+                          ? CalcRiskPercentLot(price, g_sl)
+                          : FixedLot;
+   request.type         = orderType;
+   request.type_filling = GetFillingMode();
+   request.price        = price;
+   request.sl           = g_sl;
+   request.tp           = g_tp;
+   request.deviation    = (ulong)(g_profile.maxSlippagePts / Point());
+   request.magic        = 20260101; // Magic Number固定
+   request.comment      = EA_NAME + " " + g_tradeUUID;
 
    if(!OrderSend(request, result))
    {
@@ -151,10 +167,11 @@ void ClosePosition(string reason, string extraInfo = "")
    MqlTradeRequest request = {};
    MqlTradeResult  result  = {};
 
-   request.action   = TRADE_ACTION_DEAL;
-   request.symbol   = Symbol();
-   request.volume   = PositionGetDouble(POSITION_VOLUME);
-   request.deviation = (ulong)(g_profile.maxSlippagePts / Point());
+   request.action       = TRADE_ACTION_DEAL;
+   request.symbol       = Symbol();
+   request.volume       = PositionGetDouble(POSITION_VOLUME);
+   request.type_filling = GetFillingMode();
+   request.deviation    = (ulong)(g_profile.maxSlippagePts / Point());
 
    if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
    {

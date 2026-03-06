@@ -29,6 +29,8 @@ input double            FixedLot               = 0.01;           // FixedLot
 input double            RiskPercent            = 1.0;            // RiskPercent (口座残高の%)
 input ENUM_LOG_LEVEL    LogLevel               = LOG_LEVEL_NORMAL; // LogLevel
 input int               RunId                  = 1;              // RunId
+input double            LongDisableAbove       = 0;              // LongDisableAbove(Bid≧この値でLong禁止, 0=制御なし)
+input double            ShortDisableBelow      = 0;              // ShortDisableBelow(Bid≦この値でShort禁止, 0=制御なし)
 
 // --- Notification (Impulse only) ---
 input bool              EnableDialogNotification = true;          // MT5端末ダイアログ通知（Alert）
@@ -61,6 +63,7 @@ input bool   ImpulseExceed_Enable_GOLD     = true;    // Reject if impulse > Max
 input double ImpulseExceed_MaxATR_GOLD     = 3.0;     // Max impulse range in ATR(M15) units
 
 input bool              EnableFibVisualization = true;           // EnableFibVisualization
+input bool              EnableStatusPanel      = true;           // On-chart status display (左下)
 
 // 【G2：安全弁（事故防止）】
 input ENUM_SPREAD_MODE  MaxSpreadMode          = SPREAD_MODE_ADAPTIVE; // MaxSpreadMode
@@ -237,6 +240,9 @@ int               g_smaHandles[MA_MAX_PERIODS];
 
 // Impulse確定後のBar位置
 int               g_freezeConfirmedBarShift = 0;
+
+// Status Panel
+int               g_panelMaxRow        = 0;
 
 //+------------------------------------------------------------------+
 //| Remaining Module Includes                                          |
@@ -979,6 +985,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    LoggerDeinit();
+   ClearChartStatusPanel();
 
    if(reason != REASON_CHARTCHANGE)
       DeleteCurrentFibVisualization();
@@ -1036,6 +1043,8 @@ void OnTick()
                           TimeCurrent() + (datetime)(PeriodSeconds(PERIOD_M1) * 10));
       }
    }
+
+   UpdateChartStatusPanel();
 }
 
 //+------------------------------------------------------------------+

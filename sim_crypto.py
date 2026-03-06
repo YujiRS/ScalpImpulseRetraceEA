@@ -228,9 +228,13 @@ class TradeResult:
     baseline_pass: bool = False    # M15 EMA50 slope only
     base_pass: bool = False        # M15 EMA21×EMA50 cross + slope
     loose_pass: bool = False       # M15 counter only + M5 dir match
+    flatguard_pass: bool = False   # EA-A: Base(CRYPTO) + STILL_FLAT除外
+    flatmatch_pass: bool = False   # EA-B: Base(CRYPTO) + MATCH必須
     baseline_reason: str = ""
     base_reason: str = ""
     loose_reason: str = ""
+    flatguard_reason: str = ""
+    flatmatch_reason: str = ""
     # entry/exit
     entry_bar: Optional[int] = None
     entry_price: float = 0.0
@@ -718,7 +722,8 @@ def evaluate_filters(result: TradeResult,
 
     # ═══ M5 Flat-Breakout analysis ═══
     if m5 is not None:
-        fb_dir, fb_dur, fb_since = _m5_flat_breakout(m5, m5_atr, impulse_ts)
+        fb_dir, fb_dur, fb_since = _m5_flat_breakout(m5, m5_atr, impulse_ts,
+                                                      range_atr_mult=2.5)
     else:
         fb_dir, fb_dur, fb_since = "NONE", 0, 0
     result.flat_breakout_dir = fb_dir
@@ -732,6 +737,28 @@ def evaluate_filters(result: TradeResult,
         result.flat_match = "MATCH"
     else:
         result.flat_match = "MISMATCH"
+
+    # ═══ EA-A FlatGuard: Base(CRYPTO) + STILL_FLAT除外 ═══
+    if not result.base_pass:
+        result.flatguard_pass = False
+        result.flatguard_reason = result.base_reason
+    elif result.flat_match == "STILL_FLAT":
+        result.flatguard_pass = False
+        result.flatguard_reason = "STILL_FLAT"
+    else:
+        result.flatguard_pass = True
+        result.flatguard_reason = "PASS"
+
+    # ═══ EA-B FlatMatch: Base(CRYPTO) + MATCH必須 ═══
+    if not result.base_pass:
+        result.flatmatch_pass = False
+        result.flatmatch_reason = result.base_reason
+    elif result.flat_match != "MATCH":
+        result.flatmatch_pass = False
+        result.flatmatch_reason = f"FLAT_{result.flat_match}"
+    else:
+        result.flatmatch_pass = True
+        result.flatmatch_reason = "PASS"
 
 # ═══════════════════════════════════════════════════════════════════════
 # 6. Exit simulation (EMA cross on M1 + StructBreak + TimeExit)
@@ -866,7 +893,9 @@ def _collect_stats(results: list[TradeResult], label: str) -> dict:
     filter_stats: dict[str, dict] = {}
     for name, attr in [("Baseline", "baseline_pass"),
                        ("Base(CRYPTO)", "base_pass"),
-                       ("Loose", "loose_pass")]:
+                       ("Loose", "loose_pass"),
+                       ("EA-A:FlatGuard", "flatguard_pass"),
+                       ("EA-B:FlatMatch", "flatmatch_pass")]:
         trades = [r for r in has_entry if getattr(r, attr) and r.exit_reason]
         wins = [t for t in trades if t.pnl_pips > 0]
         losses = [t for t in trades if t.pnl_pips <= 0]
@@ -905,7 +934,7 @@ def _print_results(results: list[TradeResult], label: str):
     print(header)
     print("-" * len(header))
 
-    for r in base_results:
+    for r in results:
         d_str = "LONG" if r.direction == Dir.LONG else "SHORT"
         t = r.impulse_time[:19] if r.impulse_time else ""
         rng = f"{r.impulse.range_pts:.1f}"
@@ -934,7 +963,8 @@ def _print_results(results: list[TradeResult], label: str):
     print(f"\n  {'Filter':<15} {'Pass':>5} {'Trades':>7} {'Win':>5} {'WinRate':>8} "
           f"{'AvgPnL':>10} {'TotPnL':>12} {'PF':>6}")
     print("  " + "-" * 75)
-    for name in ["Baseline", "Base(CRYPTO)", "Loose"]:
+    for name in ["Baseline", "Base(CRYPTO)", "Loose",
+                 "EA-A:FlatGuard", "EA-B:FlatMatch"]:
         fs = stats["filter_stats"][name]
         if fs["trades"] == 0:
             print(f"  {name:<15} {fs['pass']:>5} {'0':>7} {'-':>5} {'-':>8} "
@@ -991,36 +1021,14 @@ def main():
     impulses = detect_impulses(m1, m1_atr)
     print(f"    Raw impulses found: {len(impulses)}")
 
-    # ── Fib50-618 fixed, M5 flat-breakout analysis with range_atr_mult sweep ──
+    # ── EA-A (FlatGuard) vs EA-B (FlatMatch) comparison ──
     TIME_EXIT_FIXED = 12
     RT_FIXED = 25
-    RANGE_ATR_MULTS = [1.0, 1.5, 2.0, 2.5, 3.0]
 
-    print(f"[4] M5 Flat-Breakout analysis (Fib50-618, RT={RT_FIXED}, TE={TIME_EXIT_FIXED})")
+    print(f"[4] Dual-EA sim: FlatGuard vs FlatMatch (RT={RT_FIXED}, TE={TIME_EXIT_FIXED})")
+    print(f"    Flat detection: M5 range_atr_mult=2.5, range_lb=8, scan=24\n")
 
-    def _grp_stats(trades):
-        if not trades:
-            return {"trades": 0, "wins": 0, "win_rate": 0, "avg_pnl": 0,
-                    "tot_pnl": 0, "pf": 0, "exit_reasons": {}}
-        wins = [t for t in trades if t.pnl_pips > 0]
-        losses = [t for t in trades if t.pnl_pips <= 0]
-        gw = sum(t.pnl_pips for t in wins) if wins else 0
-        gl = abs(sum(t.pnl_pips for t in losses)) if losses else 0
-        er: dict[str, int] = {}
-        for t in trades:
-            er[t.exit_reason] = er.get(t.exit_reason, 0) + 1
-        return {
-            "trades": len(trades),
-            "wins": len(wins),
-            "win_rate": 100 * len(wins) / len(trades),
-            "avg_pnl": float(np.mean([t.pnl_pips for t in trades])),
-            "tot_pnl": sum(t.pnl_pips for t in trades),
-            "pf": gw / gl if gl > 0 else float("inf"),
-            "exit_reasons": er,
-        }
-
-    # First, run once to get base results (flat analysis is done per-mult below)
-    base_results: list[TradeResult] = []
+    results: list[TradeResult] = []
     last_done_bar = 0
     for imp_orig in impulses:
         imp = copy.deepcopy(imp_orig)
@@ -1034,97 +1042,67 @@ def main():
             last_done_bar = tr.exit_bar if tr.exit_bar is not None else tr.entry_bar + 30
         else:
             last_done_bar = imp.bar_idx + 10
-        base_results.append(tr)
+        results.append(tr)
 
-    _print_results(base_results, "Fib50-618")
+    stats = _print_results(results, "Dual-EA")
 
-    # Now sweep range_atr_mult for flat detection
-    has_entry_base = [r for r in base_results
-                      if r.entry_bar is not None and r.base_pass and r.exit_reason]
+    # ── Highlight comparison ──
+    print("\n" + "=" * 70)
+    print("EA COMPARISON SUMMARY")
+    print("=" * 70)
 
-    for ram in RANGE_ATR_MULTS:
-        print(f"\n{'=' * 80}")
-        print(f"M5 FLAT-BREAKOUT (range_atr_mult={ram:.1f}, range_lb=8, scan=24)")
-        print(f"  Base(CRYPTO) trades with entry: {len(has_entry_base)}")
-        print(f"{'=' * 80}")
+    col_keys = ["Base(CRYPTO)", "EA-A:FlatGuard", "EA-B:FlatMatch"]
+    col_width = 17
 
-        # Re-evaluate flat for each trade
-        for r in base_results:
-            impulse_ts = m1.index[r.impulse.bar_idx]
-            dir_str = "LONG" if r.direction == Dir.LONG else "SHORT"
-            fb_dir, fb_dur, fb_since = _m5_flat_breakout(
-                m5, m5_atr, impulse_ts, range_atr_mult=ram)
-            r.flat_breakout_dir = fb_dir
-            r.flat_duration = fb_dur
-            r.flat_bars_since = fb_since
-            if fb_dir == "STILL_FLAT":
-                r.flat_match = "STILL_FLAT"
-            elif fb_dir == "NONE":
-                r.flat_match = "NO_FLAT"
-            elif fb_dir == dir_str:
-                r.flat_match = "MATCH"
-            else:
-                r.flat_match = "MISMATCH"
+    print(f"\n  {'Metric':<14}", end="")
+    for k in col_keys:
+        print(f" {k:>{col_width}}", end="")
+    print()
+    print("  " + "-" * (14 + (col_width + 1) * len(col_keys)))
 
-        groups = {"MATCH": [], "MISMATCH": [], "NO_FLAT": [], "STILL_FLAT": []}
-        for r in has_entry_base:
-            g = r.flat_match if r.flat_match in groups else "NO_FLAT"
-            groups[g].append(r)
-
-        col_keys = ["ALL", "MATCH", "MISMATCH", "STILL_FLAT", "NO_FLAT"]
-        col_width = 14
-
-        grp_s = {
-            "ALL": _grp_stats(has_entry_base),
-            "MATCH": _grp_stats(groups["MATCH"]),
-            "MISMATCH": _grp_stats(groups["MISMATCH"]),
-            "STILL_FLAT": _grp_stats(groups["STILL_FLAT"]),
-            "NO_FLAT": _grp_stats(groups["NO_FLAT"]),
-        }
-
-        print(f"\n  {'Metric':<14}", end="")
+    for metric in ["trades", "wins", "win_rate", "avg_pnl", "tot_pnl", "pf"]:
+        print(f"  {metric:<14}", end="")
         for k in col_keys:
-            print(f" {k:>{col_width}}", end="")
+            fs = stats["filter_stats"][k]
+            if metric == "win_rate":
+                print(f" {fs[metric]:>{col_width - 1}.1f}%", end="")
+            elif metric in ("avg_pnl", "tot_pnl"):
+                print(f" {fs[metric]:>{col_width}.1f}", end="")
+            elif metric == "pf":
+                print(f" {fs[metric]:>{col_width}.2f}", end="")
+            else:
+                print(f" {fs[metric]:>{col_width}}", end="")
         print()
-        print("  " + "-" * (14 + (col_width + 1) * len(col_keys)))
 
-        for metric in ["trades", "wins", "win_rate", "avg_pnl", "tot_pnl", "pf"]:
-            print(f"  {metric:<14}", end="")
-            for k in col_keys:
-                fs = grp_s[k]
-                if metric == "win_rate":
-                    print(f" {fs[metric]:>{col_width - 1}.1f}%", end="")
-                elif metric in ("avg_pnl", "tot_pnl"):
-                    print(f" {fs[metric]:>{col_width}.1f}", end="")
-                elif metric == "pf":
-                    print(f" {fs[metric]:>{col_width}.2f}", end="")
-                else:
-                    print(f" {fs[metric]:>{col_width}}", end="")
-            print()
+    # Exit reasons
+    print(f"\n  {'Exit':<14}", end="")
+    for k in col_keys:
+        print(f" {k:>{col_width}}", end="")
+    print()
+    print("  " + "-" * (14 + (col_width + 1) * len(col_keys)))
+    all_exits = set()
+    for k in col_keys:
+        all_exits.update(stats["filter_stats"][k]["exit_reasons"].keys())
+    for er in sorted(all_exits):
+        print(f"  {er:<14}", end="")
+        for k in col_keys:
+            cnt = stats["filter_stats"][k]["exit_reasons"].get(er, 0)
+            print(f" {cnt:>{col_width}}", end="")
+        print()
 
-        # Flat duration & bars_since
-        for gname in ["MATCH", "MISMATCH"]:
-            if groups[gname]:
-                durations = [r.flat_duration for r in groups[gname]]
-                sinces = [r.flat_bars_since for r in groups[gname]]
-                print(f"\n  {gname} flat_dur (M5): "
-                      f"min={min(durations)} avg={np.mean(durations):.1f} max={max(durations)}")
-                print(f"  {gname} bars_since (M5): "
-                      f"min={min(sinces)} avg={np.mean(sinces):.1f} max={max(sinces)}")
-
-        # Distribution for ALL impulses
-        fb_counts = {"MATCH": 0, "MISMATCH": 0, "STILL_FLAT": 0, "NO_FLAT": 0}
-        for r in base_results:
-            g = r.flat_match if r.flat_match in fb_counts else "NO_FLAT"
-            fb_counts[g] += 1
-        print(f"\n  All {len(base_results)} impulses:")
-        for k, v in fb_counts.items():
-            print(f"    {k:<12} {v:>5}  ({100*v/len(base_results):.1f}%)")
+    # Flat-match distribution for entered trades
+    print(f"\n  Flat-breakout distribution (entries with Base(CRYPTO) pass):")
+    has_entry = [r for r in results if r.entry_bar is not None and r.base_pass and r.exit_reason]
+    fm_counts: dict[str, int] = {}
+    for r in has_entry:
+        fm_counts[r.flat_match] = fm_counts.get(r.flat_match, 0) + 1
+    for k, v in sorted(fm_counts.items(), key=lambda x: -x[1]):
+        print(f"    {k:<12} {v:>5}  ({100*v/len(has_entry):.1f}%)")
 
     # ── CSV output ──
     csv_path = os.path.join(script_dir, "sim_dat", "sim_results_crypto.csv")
     rows = []
-    for r in base_results:
+    for r in results:
         rows.append({
             "ImpulseTime": r.impulse_time,
             "Direction": "LONG" if r.direction == Dir.LONG else "SHORT",
@@ -1137,9 +1115,10 @@ def main():
             "RejectStage": r.reject_stage,
             "Baseline": r.baseline_reason,
             "Base_CRYPTO": r.base_reason,
-            "Loose": r.loose_reason,
+            "FlatGuard": r.flatguard_reason,
+            "FlatMatch_EA": r.flatmatch_reason,
             "FlatBreakout": r.flat_breakout_dir,
-            "FlatMatch": r.flat_match,
+            "FlatState": r.flat_match,
             "FlatDuration": r.flat_duration,
             "FlatBarsSince": r.flat_bars_since,
             "EntryPrice": round(r.entry_price, 2) if r.entry_bar else "",

@@ -30,6 +30,8 @@ input double            FixedLot               = 0.01;           // FixedLot
 input double            RiskPercent            = 1.0;            // RiskPercent (口座残高の%)
 input ENUM_LOG_LEVEL    LogLevel               = LOG_LEVEL_NORMAL; // LogLevel
 input int               RunId                  = 1;              // RunId
+input double            LongDisableAbove       = 0;              // LongDisableAbove(Bid≧この値でLong禁止, 0=制御なし)
+input double            ShortDisableBelow      = 0;              // ShortDisableBelow(Bid≦この値でShort禁止, 0=制御なし)
 
 // --- Notification (Impulse only) ---
 input bool              EnableDialogNotification = true;          // MT5端末ダイアログ通知（Alert）

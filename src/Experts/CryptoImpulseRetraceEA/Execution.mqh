@@ -51,6 +51,23 @@ ENUM_ORDER_TYPE_FILLING GetFillingMode()
 //+------------------------------------------------------------------+
 bool ExecuteEntry()
 {
+   // 方向レートフィルター
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   if(g_impulseDir == DIR_LONG && LongDisableAbove > 0 && bid >= LongDisableAbove)
+   {
+      WriteLog(LOG_REJECT, "", "LongDisabledAbove",
+         "Bid=" + DoubleToString(bid, (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS))
+         + " >= LongDisableAbove=" + DoubleToString(LongDisableAbove, (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS)));
+      return false;
+   }
+   if(g_impulseDir == DIR_SHORT && ShortDisableBelow > 0 && bid <= ShortDisableBelow)
+   {
+      WriteLog(LOG_REJECT, "", "ShortDisabledBelow",
+         "Bid=" + DoubleToString(bid, (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS))
+         + " <= ShortDisableBelow=" + DoubleToString(ShortDisableBelow, (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS)));
+      return false;
+   }
+
    if(!IsSpreadOK())
    {
       WriteLog(LOG_REJECT, "", "SpreadExceeded", "SpreadPts=" + DoubleToString(GetCurrentSpreadPts(), 1));

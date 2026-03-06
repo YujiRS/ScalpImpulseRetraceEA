@@ -52,6 +52,8 @@ input bool   ReversalEngulfing_Enable    = true;
 input double ReversalBigBodyMult_FX      = 0.9;    // FX ATR(H1)*mult
 
 input bool              EnableFibVisualization = true;           // EnableFibVisualization
+input bool              EnableStatusPanel      = true;           // On-chart status display (左下)
+input bool              EnableStatusPanel      = true;           // On-chart status display (左下)
 
 // 【G2：安全弁（事故防止）】
 input ENUM_SPREAD_MODE  MaxSpreadMode          = SPREAD_MODE_ADAPTIVE; // MaxSpreadMode
@@ -223,6 +225,9 @@ int               g_smaHandles[MA_MAX_PERIODS];
 
 // Impulse確定後のBar位置
 int               g_freezeConfirmedBarShift = 0;
+
+// Status Panel
+int               g_panelMaxRow        = 0;
 
 //+------------------------------------------------------------------+
 //| Remaining Module Includes                                          |
@@ -889,6 +894,7 @@ void OnDeinit(const int reason)
    g_deinitReason = reason;
 
    LoggerDeinit();
+   ClearChartStatusPanel();
 
    if(reason != REASON_CHARTCHANGE)
       DeleteCurrentFibVisualization();
@@ -949,6 +955,8 @@ void OnTick()
                           TimeCurrent() + (datetime)(PeriodSeconds(PERIOD_M1) * 10));
       }
    }
+
+   UpdateChartStatusPanel();
 }
 
 //+------------------------------------------------------------------+

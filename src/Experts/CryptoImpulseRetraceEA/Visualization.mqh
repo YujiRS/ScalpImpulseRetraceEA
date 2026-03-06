@@ -158,7 +158,7 @@ void DeleteCurrentFibVisualization()
 #define PANEL_FSIZE   9
 #define PANEL_CLR     clrWhite
 #define PANEL_CLR_DIM clrDarkGray
-#define PANEL_LINE_H  14        // 行あたりピクセル高
+#define PANEL_LINE_H  16        // 行あたりピクセル高
 
 void PanelSetLine(int row, const string text, color clr = PANEL_CLR)
 {

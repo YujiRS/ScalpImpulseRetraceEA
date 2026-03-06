@@ -61,6 +61,7 @@ input bool   ImpulseExceed_Enable_GOLD     = true;    // Reject if impulse > Max
 input double ImpulseExceed_MaxATR_GOLD     = 3.0;     // Max impulse range in ATR(M15) units
 
 input bool              EnableFibVisualization = true;           // EnableFibVisualization
+input bool              EnableStatusPanel      = true;           // On-chart status display (左下)
 
 // 【G2：安全弁（事故防止）】
 input ENUM_SPREAD_MODE  MaxSpreadMode          = SPREAD_MODE_ADAPTIVE; // MaxSpreadMode
@@ -237,6 +238,9 @@ int               g_smaHandles[MA_MAX_PERIODS];
 
 // Impulse確定後のBar位置
 int               g_freezeConfirmedBarShift = 0;
+
+// Status Panel
+int               g_panelMaxRow        = 0;
 
 //+------------------------------------------------------------------+
 //| Remaining Module Includes                                          |
@@ -979,6 +983,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    LoggerDeinit();
+   ClearChartStatusPanel();
 
    if(reason != REASON_CHARTCHANGE)
       DeleteCurrentFibVisualization();
@@ -1036,6 +1041,8 @@ void OnTick()
                           TimeCurrent() + (datetime)(PeriodSeconds(PERIOD_M1) * 10));
       }
    }
+
+   UpdateChartStatusPanel();
 }
 
 //+------------------------------------------------------------------+

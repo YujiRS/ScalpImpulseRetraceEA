@@ -53,7 +53,6 @@ input double ReversalBigBodyMult_FX      = 0.9;    // FX ATR(H1)*mult
 
 input bool              EnableFibVisualization = true;           // EnableFibVisualization
 input bool              EnableStatusPanel      = true;           // On-chart status display (左下)
-input bool              EnableStatusPanel      = true;           // On-chart status display (左下)
 
 // 【G2：安全弁（事故防止）】
 input ENUM_SPREAD_MODE  MaxSpreadMode          = SPREAD_MODE_ADAPTIVE; // MaxSpreadMode

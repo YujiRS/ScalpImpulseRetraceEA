@@ -2,7 +2,7 @@
 
 ## 0\. 位置づけ（正典宣言）
 
-本書 **EA\_LogSpec\_v202603（DOC-LOG）** は、ScalpImpulseRetraceEA における **ログ仕様の唯一の正典**である。
+本書 **EA\_LogSpec\_v202603（DOC-LOG）** は、GoldBreakoutFilterEA における **ログ仕様の唯一の正典**である。
 
 - 対象：Eventログ（実行ログ）／ImpulseSummary（解析ログ）  
 - 本書で定義する：列定義、命名規則、出力条件、RejectStage語彙、拡張方針（後方互換）  
@@ -89,12 +89,12 @@ LogLevel により出力範囲を制御する。
 
 ### 2.5 ログファイル命名規則（固定）
 
-`ScaEA_{RunId}_{Symbol}.tsv`
+`GbfEA_{RunId}_{Symbol}.tsv`
 
 - RunId は実行日を表す `YYYYMMDD` とする（固定）  
-- プレフィックス `ScaEA_` と拡張子 `.tsv` は固定
+- プレフィックス `GbfEA_` と拡張子 `.tsv` は固定
 
-例：`ScaEA_20260223_USDJPY.tsv`
+例：`GbfEA_20260223_USDJPY.tsv`
 
 ### 2.6 列拡張方針（後方互換）
 
@@ -122,12 +122,12 @@ ImpulseSummaryログは、1Impulse=1行で集計用に出力する。
 
 ### 3.2 ファイル命名規則
 
-`ScaEA_SUMMARY_{RunId}_{Symbol}.tsv`
+`GbfEA_SUMMARY_{RunId}_{Symbol}.tsv`
 
 - RunId は 2.5 と同一の `YYYYMMDD` を使用する（固定）  
-- プレフィックス `ScaEA_` と拡張子 `.tsv` は固定
+- プレフィックス `GbfEA_` と拡張子 `.tsv` は固定
 
-例：`ScaEA_SUMMARY_20260223_USDJPY.tsv`
+例：`GbfEA_SUMMARY_20260223_USDJPY.tsv`
 
 ### 3.3 出力形式（TSV固定列順）
 
@@ -197,10 +197,22 @@ ImpulseSummary の列順は **実ファイル（TSV）順**に固定する。
 - TrendSlopeMin  
 - TrendATRFloor  
 - TrendAligned  
-- ReversalGuardEnable  
-- ReversalTF  
-- ReversalGuardTriggered  
+- ReversalGuardEnable
+- ReversalTF
+- ReversalGuardTriggered
 - ReversalReason
+
+（EMA Cross Filter / Impulse Exceed Filter：後方互換のため末尾追加）
+
+- EMACrossFilterEnable
+- EMACrossFastVal
+- EMACrossSlowVal
+- EMACrossDir
+- EMACrossAligned
+- ImpulseExceedEnable
+- ImpulseRangeATR
+- ImpulseExceedMax
+- ImpulseExceedTriggered
 
 ### 3.4 値ルール
 
@@ -208,8 +220,10 @@ ImpulseSummary の列順は **実ファイル（TSV）順**に固定する。
 - 未到達／未評価の列は空欄で出力  
 - 文字列列は固定語彙（集計可能な表記）で出力する  
 - TrendDir は `LONG / SHORT / FLAT` のいずれか（TrendFilterEnable=1 かつ評価済みの場合）  
-- ReversalReason は固定語彙（例：`ENGULFING` / `BIG_BODY` / `WICK_REJECT` / `BIG_BODY_2` 等）。  
-  未発火時は空欄でよい  
+- ReversalReason は固定語彙（例：`ENGULFING` / `BIG_BODY` / `WICK_REJECT` / `BIG_BODY_2` 等）。
+  未発火時は空欄でよい
+- EMACrossDir は `LONG / SHORT / FLAT` のいずれか（EMACrossFilterEnable=1 かつ評価済みの場合）
+- ImpulseRangeATR は Impulse Range / ATR(M15) の比率（小数）。未評価時は0  
 - **Pts（単位定義）**：Pts系列（RangePts / BandWidthPts / LeaveDistancePts / SpreadBasePts / StructBreakDistPts 等）は  
   **「価格差を Point() で割った値（MT5ポイント数）」**として扱う。  
   したがって \*\*通貨ペアが異なっても比較可能な“point-count”\*\*であり、  
@@ -261,6 +275,9 @@ RejectStageは最終停止理由のみを出力する。
 - TREND\_FLAT
 - TREND\_MISMATCH
 - REVERSAL\_GUARD
+- EMA\_CROSS\_MISMATCH
+- EMA\_CROSS\_NODATA
+- IMPULSE\_EXCEED
 
 （※語彙追加時は後方互換を守る：既存語彙の意味変更は禁止）
 
@@ -448,9 +465,9 @@ LogLevel により出力範囲を制御する。
 
 ## 13.5 ログファイル命名規則（固定）
 
-`ScaEA_{RunId}_{Symbol}.tsv`
+`GbfEA_{RunId}_{Symbol}.tsv`
 
-例： `ScaEA_01_USDJPY.tsv`
+例： `GbfEA_01_USDJPY.tsv`
 
 ---
 
@@ -489,7 +506,7 @@ ImpulseSummaryログは、1Impulse=1行で集計用に出力する。
 
 ### 13.9.2 ファイル命名規則
 
-`ScaEA_SUMMARY_{Symbol}.tsv`
+`GbfEA_SUMMARY_{Symbol}.tsv`
 
 ---
 
@@ -541,6 +558,12 @@ RejectStageは最終停止理由のみを出力する。
 * RANGE\_COST\_FAIL  
 * RR\_FAIL  
 * SPREAD\_BLOCK
+* TREND\_FLAT
+* TREND\_MISMATCH
+* REVERSAL\_GUARD
+* EMA\_CROSS\_MISMATCH
+* EMA\_CROSS\_NODATA
+* IMPULSE\_EXCEED
 
 ---
 

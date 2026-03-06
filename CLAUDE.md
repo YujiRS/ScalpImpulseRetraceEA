@@ -1,9 +1,9 @@
-# ScalpImpulseRetraceEA
+# GoldBreakoutFilterEA
 
 ## プロジェクト概要
-MT5用スキャルピングEA（MQL5）。
-M1 Impulse後の押しを狙い、2回目タッチ＋反転確定でエントリー。
-市場特性（FX/GOLD/CRYPTO）ごとにパラメータと許可レンジを分離。
+MT5用GOLD特化ブレイクアウトEA（MQL5）。
+Impulse検出＋EMA/Exceedフィルターで高確度エントリー。
+旧称: ScalpImpulseRetraceEA → v2.0でGOLD特化・ロジック刷新。
 
 ## 仕様書（実装・修正時は必ず該当章を読んでから作業すること）
 - docs/DOC-CORE.md：設計仕様書（ロジック・状態遷移・パラメータの正典）

@@ -576,7 +576,8 @@ def evaluate_filters(result: TradeResult,
 # 6. Exit simulation (EMA cross on M1 + StructBreak + TimeExit)
 # ═══════════════════════════════════════════════════════════════════════
 
-def simulate_exit(result: TradeResult, m1: pd.DataFrame, m1_atr: pd.Series):
+def simulate_exit(result: TradeResult, m1: pd.DataFrame, m1_atr: pd.Series,
+                  time_exit_bars: int = TIME_EXIT_BARS):
     """DOC-CORE §9.2: StructBreak(Fib0) > TimeExit > Breakeven > EMACross."""
     if result.entry_bar is None:
         return
@@ -632,7 +633,7 @@ def simulate_exit(result: TradeResult, m1: pd.DataFrame, m1_atr: pd.Series):
         # ── 2) TimeExit ──
         bars_held = i - result.entry_bar
         current_pnl = (c - entry_price) if d == Dir.LONG else (entry_price - c)
-        if bars_held >= TIME_EXIT_BARS and current_pnl <= 0:
+        if bars_held >= time_exit_bars and current_pnl <= 0:
             result.exit_bar = i
             result.exit_price = c
             result.exit_reason = "TimeExit"
@@ -829,9 +830,9 @@ def main():
     impulses = detect_impulses(m1, m1_atr)
     print(f"    Raw impulses found: {len(impulses)}")
 
-    # ── Run entry logic + filter + exit ──
-    print("[4] Running state machine (Freeze→Touch→Confirm→Exit) …")
-    results: list[TradeResult] = []
+    # ── Run entry logic (shared across all TimeExit variants) ──
+    print("[4] Running entry logic (Freeze→Touch→Confirm) …")
+    entry_results: list[TradeResult] = []
     last_done_bar = 0
 
     for imp_orig in impulses:
@@ -843,25 +844,88 @@ def main():
         evaluate_filters(tr, m1, m15_ema21, m15_ema50, m15_atr, m5_sma, m5_atr)
 
         if tr.entry_bar is not None:
-            simulate_exit(tr, m1, m1_atr)
-            last_done_bar = tr.exit_bar if tr.exit_bar is not None else tr.entry_bar + 30
+            last_done_bar = tr.entry_bar + 30  # placeholder; exit varies
         else:
             last_done_bar = imp.bar_idx + 10
 
-        results.append(tr)
+        entry_results.append(tr)
 
-    print(f"    Impulses processed: {len(results)}")
+    print(f"    Impulses processed: {len(entry_results)}")
 
-    # ── Output ──
+    # ── TimeExitBars comparison: 6, 12, 15 ──
+    time_exit_variants = [6, 12, 15]
+    all_variant_stats: list[dict] = []
+
+    for teb in time_exit_variants:
+        label = f"TimeExit={teb}"
+        print(f"\n{'=' * 70}")
+        print(f"  {label}")
+        print(f"{'=' * 70}\n")
+
+        variant_results: list[TradeResult] = []
+        for tr_orig in entry_results:
+            tr = copy.deepcopy(tr_orig)
+            if tr.entry_bar is not None:
+                simulate_exit(tr, m1, m1_atr, time_exit_bars=teb)
+            variant_results.append(tr)
+
+        stats = _print_results(variant_results, label)
+        all_variant_stats.append(stats)
+
+    # ── Comparison table ──
     print("\n" + "=" * 70)
-    print("TRADE DETAIL")
-    print("=" * 70 + "\n")
-    stats = _print_results(results, "CRYPTO")
+    print("TimeExitBars COMPARISON (Base(CRYPTO) filter only)")
+    print("=" * 70)
 
-    # ── CSV output ──
+    print(f"\n  {'Metric':<20}", end="")
+    for teb in time_exit_variants:
+        print(f" {'TE='+str(teb):>12}", end="")
+    print()
+    print("  " + "-" * (20 + 13 * len(time_exit_variants)))
+
+    for metric in ["trades", "wins", "win_rate", "avg_pnl", "tot_pnl", "pf"]:
+        print(f"  {metric:<20}", end="")
+        for s in all_variant_stats:
+            fs = s["filter_stats"]["Base(CRYPTO)"]
+            if metric == "win_rate":
+                print(f" {fs[metric]:>11.1f}%", end="")
+            elif metric in ("avg_pnl", "tot_pnl"):
+                print(f" {fs[metric]:>12.1f}", end="")
+            elif metric == "pf":
+                print(f" {fs[metric]:>12.2f}", end="")
+            else:
+                print(f" {fs[metric]:>12}", end="")
+        print()
+
+    # Exit reason breakdown
+    print(f"\n  {'Exit Reason':<20}", end="")
+    for teb in time_exit_variants:
+        print(f" {'TE='+str(teb):>12}", end="")
+    print()
+    print("  " + "-" * (20 + 13 * len(time_exit_variants)))
+
+    all_reasons = set()
+    for s in all_variant_stats:
+        all_reasons.update(s["filter_stats"]["Base(CRYPTO)"]["exit_reasons"].keys())
+    for er in sorted(all_reasons):
+        print(f"  {er:<20}", end="")
+        for s in all_variant_stats:
+            cnt = s["filter_stats"]["Base(CRYPTO)"]["exit_reasons"].get(er, 0)
+            print(f" {cnt:>12}", end="")
+        print()
+
+    # ── CSV output (best variant) ──
     csv_path = os.path.join(script_dir, "sim_dat", "sim_results_crypto.csv")
+    # Use TE=12 as middle ground for CSV
+    mid_results: list[TradeResult] = []
+    for tr_orig in entry_results:
+        tr = copy.deepcopy(tr_orig)
+        if tr.entry_bar is not None:
+            simulate_exit(tr, m1, m1_atr, time_exit_bars=12)
+        mid_results.append(tr)
+
     rows = []
-    for r in results:
+    for r in mid_results:
         rows.append({
             "ImpulseTime": r.impulse_time,
             "Direction": "LONG" if r.direction == Dir.LONG else "SHORT",
@@ -885,7 +949,7 @@ def main():
         })
     df_out = pd.DataFrame(rows)
     df_out.to_csv(csv_path, index=False)
-    print(f"\nCSV written: {csv_path}  ({len(df_out)} rows)")
+    print(f"\nCSV written (TE=12): {csv_path}  ({len(df_out)} rows)")
 
 
 if __name__ == "__main__":

@@ -265,8 +265,12 @@ def _check_microbreak_crypto(m1_h, m1_l, m1_c, i: int, d: Dir) -> bool:
 
 def run_entry_logic(imp: Impulse, m1: pd.DataFrame, m1_atr: pd.Series,
                     retouch_limit: int = RETOUCH_TIME_LIMIT_BARS,
-                    band_mode: str = "50_618") -> TradeResult:
-    """CRYPTO state machine. band_mode: '50_618' (default) or '50_only'."""
+                    band_mode: str = "50_618",
+                    atr_retrace_mult: float = 0.0) -> TradeResult:
+    """CRYPTO state machine.
+    band_mode: '50_618' | '50_only' | 'atr_retrace'
+    atr_retrace_mult: used when band_mode='atr_retrace' — band center = frozen_end ± ATR×mult
+    """
     result = TradeResult(impulse=imp, direction=imp.direction)
     result.impulse_time = str(m1.index[imp.bar_idx])
 
@@ -336,27 +340,40 @@ def run_entry_logic(imp: Impulse, m1: pd.DataFrame, m1_atr: pd.Series,
     band_width_price = atr_at_freeze * BAND_ATR_MULT
     imp.band_width = band_width_price
 
-    # Fib50 and Fib61.8
-    if d == Dir.LONG:
-        fib50 = frozen_end - range_price * FIB_50
-        fib618 = frozen_end - range_price * FIB_618
-        if band_mode == "50_only":
-            imp.band_upper = fib50 + band_width_price
-            imp.band_lower = fib50 - band_width_price
-        else:  # 50_618
-            imp.band_upper = fib50 + band_width_price
-            imp.band_lower = fib618 - band_width_price
+    # ── Band position (mode-dependent) ──
+    if band_mode == "atr_retrace":
+        # ATR-based: band center = frozen_end ± ATR × mult (retrace direction)
+        retrace_dist = atr_at_freeze * atr_retrace_mult
+        if d == Dir.LONG:
+            band_center = frozen_end - retrace_dist
+        else:
+            band_center = frozen_end + retrace_dist
+        imp.band_upper = band_center + band_width_price
+        imp.band_lower = band_center - band_width_price
+        imp.fib50 = band_center   # store center for reference
+        imp.fib618 = 0.0
     else:
-        fib50 = frozen_end + range_price * FIB_50
-        fib618 = frozen_end + range_price * FIB_618
-        if band_mode == "50_only":
-            imp.band_upper = fib50 + band_width_price
-            imp.band_lower = fib50 - band_width_price
-        else:  # 50_618
-            imp.band_upper = fib618 + band_width_price
-            imp.band_lower = fib50 - band_width_price
-    imp.fib50 = fib50
-    imp.fib618 = fib618
+        # Fib-based
+        if d == Dir.LONG:
+            fib50 = frozen_end - range_price * FIB_50
+            fib618 = frozen_end - range_price * FIB_618
+            if band_mode == "50_only":
+                imp.band_upper = fib50 + band_width_price
+                imp.band_lower = fib50 - band_width_price
+            else:  # 50_618
+                imp.band_upper = fib50 + band_width_price
+                imp.band_lower = fib618 - band_width_price
+        else:
+            fib50 = frozen_end + range_price * FIB_50
+            fib618 = frozen_end + range_price * FIB_618
+            if band_mode == "50_only":
+                imp.band_upper = fib50 + band_width_price
+                imp.band_lower = fib50 - band_width_price
+            else:  # 50_618
+                imp.band_upper = fib618 + band_width_price
+                imp.band_lower = fib50 - band_width_price
+        imp.fib50 = fib50
+        imp.fib618 = fib618
 
     # ── RiskGate (simplified) ──
     band_total = imp.band_upper - imp.band_lower
@@ -839,52 +856,62 @@ def main():
     impulses = detect_impulses(m1, m1_atr)
     print(f"    Raw impulses found: {len(impulses)}")
 
-    # ── Grid: RetouchLimit × BandMode, TimeExit fixed at 12 ──
+    # ── Fib vs ATR retrace comparison, TE=12 fixed, RT=25 fixed ──
     TIME_EXIT_FIXED = 12
-    retouch_variants = [25, 35, 45]
-    band_variants = ["50_618", "50_only"]
+    RT_FIXED = 25
 
-    print(f"[4] Grid search: RetouchLimit={retouch_variants} × Band={band_variants}, TE={TIME_EXIT_FIXED}")
+    # Variants: Fib baseline + ATR retrace with different multipliers
+    variants: list[dict] = [
+        {"label": "Fib50-618", "band_mode": "50_618", "atr_mult": 0.0},
+        {"label": "ATR×1.5",   "band_mode": "atr_retrace", "atr_mult": 1.5},
+        {"label": "ATR×2.0",   "band_mode": "atr_retrace", "atr_mult": 2.0},
+        {"label": "ATR×2.5",   "band_mode": "atr_retrace", "atr_mult": 2.5},
+        {"label": "ATR×3.0",   "band_mode": "atr_retrace", "atr_mult": 3.0},
+        {"label": "ATR×3.5",   "band_mode": "atr_retrace", "atr_mult": 3.5},
+    ]
 
-    grid_stats: dict[str, dict] = {}  # key = "RT{n}_{band}"
+    print(f"[4] Fib vs ATR retrace comparison (RT={RT_FIXED}, TE={TIME_EXIT_FIXED})")
 
-    for rt in retouch_variants:
-        for bm in band_variants:
-            label = f"RT{rt}_{bm}"
-            print(f"\n{'=' * 70}")
-            print(f"  {label}  (RetouchLimit={rt}, Band={bm}, TimeExit={TIME_EXIT_FIXED})")
-            print(f"{'=' * 70}\n")
+    all_stats: dict[str, dict] = {}
 
-            results: list[TradeResult] = []
-            last_done_bar = 0
+    for v in variants:
+        label = v["label"]
+        print(f"\n{'=' * 70}")
+        print(f"  {label}  (RT={RT_FIXED}, TE={TIME_EXIT_FIXED})")
+        print(f"{'=' * 70}\n")
 
-            for imp_orig in impulses:
-                imp = copy.deepcopy(imp_orig)
-                if imp.bar_idx <= last_done_bar:
-                    continue
+        results: list[TradeResult] = []
+        last_done_bar = 0
 
-                tr = run_entry_logic(imp, m1, m1_atr,
-                                     retouch_limit=rt, band_mode=bm)
-                evaluate_filters(tr, m1, m15_ema21, m15_ema50, m15_atr, m5_sma, m5_atr)
+        for imp_orig in impulses:
+            imp = copy.deepcopy(imp_orig)
+            if imp.bar_idx <= last_done_bar:
+                continue
 
-                if tr.entry_bar is not None:
-                    simulate_exit(tr, m1, m1_atr, time_exit_bars=TIME_EXIT_FIXED)
-                    last_done_bar = tr.exit_bar if tr.exit_bar is not None else tr.entry_bar + 30
-                else:
-                    last_done_bar = imp.bar_idx + 10
+            tr = run_entry_logic(imp, m1, m1_atr,
+                                 retouch_limit=RT_FIXED,
+                                 band_mode=v["band_mode"],
+                                 atr_retrace_mult=v["atr_mult"])
+            evaluate_filters(tr, m1, m15_ema21, m15_ema50, m15_atr, m5_sma, m5_atr)
 
-                results.append(tr)
+            if tr.entry_bar is not None:
+                simulate_exit(tr, m1, m1_atr, time_exit_bars=TIME_EXIT_FIXED)
+                last_done_bar = tr.exit_bar if tr.exit_bar is not None else tr.entry_bar + 30
+            else:
+                last_done_bar = imp.bar_idx + 10
 
-            stats = _print_results(results, label)
-            grid_stats[label] = stats
+            results.append(tr)
 
-    # ── Grid comparison table (Base(CRYPTO) filter) ──
-    print("\n" + "=" * 80)
-    print("GRID COMPARISON: RetouchLimit × BandMode  (Base(CRYPTO), TE=12)")
-    print("=" * 80)
+        stats = _print_results(results, label)
+        all_stats[label] = stats
 
-    col_keys = [f"RT{rt}_{bm}" for rt in retouch_variants for bm in band_variants]
-    col_width = 14
+    # ── Comparison table (Base(CRYPTO) filter) ──
+    print("\n" + "=" * 90)
+    print("FIB vs ATR RETRACE COMPARISON  (Base(CRYPTO), RT=25, TE=12)")
+    print("=" * 90)
+
+    col_keys = [v["label"] for v in variants]
+    col_width = 13
 
     print(f"\n  {'Metric':<14}", end="")
     for k in col_keys:
@@ -895,7 +922,7 @@ def main():
     for metric in ["trades", "wins", "win_rate", "avg_pnl", "tot_pnl", "pf"]:
         print(f"  {metric:<14}", end="")
         for k in col_keys:
-            fs = grid_stats[k]["filter_stats"]["Base(CRYPTO)"]
+            fs = all_stats[k]["filter_stats"]["Base(CRYPTO)"]
             if metric == "win_rate":
                 print(f" {fs[metric]:>{col_width - 1}.1f}%", end="")
             elif metric in ("avg_pnl", "tot_pnl"):
@@ -906,19 +933,19 @@ def main():
                 print(f" {fs[metric]:>{col_width}}", end="")
         print()
 
-    # Reject comparison
+    # Reject breakdown
     print(f"\n  {'Rejects':<14}", end="")
     for k in col_keys:
-        print(f" {grid_stats[k]['rejects']:>{col_width}}", end="")
+        print(f" {all_stats[k]['rejects']:>{col_width}}", end="")
     print()
 
     all_rej = set()
-    for s in grid_stats.values():
+    for s in all_stats.values():
         all_rej.update(s["reject_counts"].keys())
     for stage in sorted(all_rej):
         print(f"  {stage:<14}", end="")
         for k in col_keys:
-            cnt = grid_stats[k]["reject_counts"].get(stage, 0)
+            cnt = all_stats[k]["reject_counts"].get(stage, 0)
             print(f" {cnt:>{col_width}}", end="")
         print()
 
@@ -930,34 +957,34 @@ def main():
     print("  " + "-" * (14 + (col_width + 1) * len(col_keys)))
 
     all_exits = set()
-    for s in grid_stats.values():
+    for s in all_stats.values():
         all_exits.update(s["filter_stats"]["Base(CRYPTO)"]["exit_reasons"].keys())
     for er in sorted(all_exits):
         print(f"  {er:<14}", end="")
         for k in col_keys:
-            cnt = grid_stats[k]["filter_stats"]["Base(CRYPTO)"]["exit_reasons"].get(er, 0)
+            cnt = all_stats[k]["filter_stats"]["Base(CRYPTO)"]["exit_reasons"].get(er, 0)
             print(f" {cnt:>{col_width}}", end="")
         print()
 
-    # ── CSV output (best combo) ──
+    # ── CSV output (best) ──
     csv_path = os.path.join(script_dir, "sim_dat", "sim_results_crypto.csv")
-    # Find best PF combo
-    best_key = max(col_keys, key=lambda k: grid_stats[k]["filter_stats"]["Base(CRYPTO)"]["pf"]
-                   if grid_stats[k]["filter_stats"]["Base(CRYPTO)"]["trades"] > 0 else 0)
-    best_fs = grid_stats[best_key]["filter_stats"]["Base(CRYPTO)"]
-    print(f"\n  Best combo: {best_key}  (PF={best_fs['pf']:.2f}, WR={best_fs['win_rate']:.1f}%, "
+    best_key = max(col_keys, key=lambda k: all_stats[k]["filter_stats"]["Base(CRYPTO)"]["pf"]
+                   if all_stats[k]["filter_stats"]["Base(CRYPTO)"]["trades"] > 0 else 0)
+    best_fs = all_stats[best_key]["filter_stats"]["Base(CRYPTO)"]
+    print(f"\n  Best: {best_key}  (PF={best_fs['pf']:.2f}, WR={best_fs['win_rate']:.1f}%, "
           f"TotPnL={best_fs['tot_pnl']:.0f})")
 
-    # Re-run best for CSV
-    best_rt = int(best_key.split("_")[0].replace("RT", ""))
-    best_bm = best_key.split("_", 1)[1]
+    # Find best variant params
+    best_v = [v for v in variants if v["label"] == best_key][0]
     csv_results: list[TradeResult] = []
     last_done_bar = 0
     for imp_orig in impulses:
         imp = copy.deepcopy(imp_orig)
         if imp.bar_idx <= last_done_bar:
             continue
-        tr = run_entry_logic(imp, m1, m1_atr, retouch_limit=best_rt, band_mode=best_bm)
+        tr = run_entry_logic(imp, m1, m1_atr, retouch_limit=RT_FIXED,
+                             band_mode=best_v["band_mode"],
+                             atr_retrace_mult=best_v["atr_mult"])
         evaluate_filters(tr, m1, m15_ema21, m15_ema50, m15_atr, m5_sma, m5_atr)
         if tr.entry_bar is not None:
             simulate_exit(tr, m1, m1_atr, time_exit_bars=TIME_EXIT_FIXED)
@@ -974,8 +1001,8 @@ def main():
             "RangePts": round(r.impulse.range_pts, 1),
             "SpreadAtFreeze": round(r.impulse.spread_at_freeze, 0),
             "BandWidth": round(r.impulse.band_width / point(), 1),
-            "Fib50": round(r.impulse.fib50, 2),
-            "Fib618": round(r.impulse.fib618, 2),
+            "BandCenter": round(r.impulse.fib50, 2),
+            "BandMode": best_v["band_mode"],
             "ConfirmType": r.confirm_type,
             "RejectStage": r.reject_stage,
             "Baseline": r.baseline_reason,
@@ -991,7 +1018,7 @@ def main():
         })
     df_out = pd.DataFrame(rows)
     df_out.to_csv(csv_path, index=False)
-    print(f"\nCSV written ({best_key}, TE={TIME_EXIT_FIXED}): {csv_path}  ({len(df_out)} rows)")
+    print(f"\nCSV written ({best_key}): {csv_path}  ({len(df_out)} rows)")
 
 
 if __name__ == "__main__":

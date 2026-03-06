@@ -246,6 +246,11 @@ class TradeResult:
     # timing
     freeze_time: str = ""
     impulse_time: str = ""
+    # M5 flat-breakout analysis
+    flat_breakout_dir: str = ""     # LONG/SHORT/NONE/STILL_FLAT
+    flat_duration: int = 0          # M5 bars of flat before breakout
+    flat_bars_since: int = 0        # M5 bars from flat end to impulse
+    flat_match: str = ""            # MATCH/MISMATCH/NO_FLAT/STILL_FLAT
 
 
 def _check_microbreak_crypto(m1_h, m1_l, m1_c, i: int, d: Dir) -> bool:
@@ -549,10 +554,123 @@ def _m5_slope_eval(m5_sma: pd.Series, m5_atr: pd.Series,
     return direction, strength, ratio
 
 
+def _m5_flat_breakout(m5: pd.DataFrame, m5_atr: pd.Series,
+                      impulse_ts: pd.Timestamp,
+                      range_lookback: int = 8,
+                      range_atr_mult: float = 0.50,
+                      scan_depth: int = 24) -> tuple[str, int, int]:
+    """Range-based flat detection on M5 (same concept as CloseByFlatRangeEA).
+
+    Scans backward from impulse to find a period where the M5 high-low range
+    over `range_lookback` bars was <= ATR × range_atr_mult (= flat/ranging).
+    Then checks if close broke above/below that range.
+
+    Returns (breakout_dir, flat_duration_bars, bars_since_breakout):
+      breakout_dir: "LONG", "SHORT", "NONE", "STILL_FLAT"
+      flat_duration_bars: how many M5 bars the range stayed tight
+      bars_since_breakout: M5 bars from breakout to impulse
+    """
+    loc = m5.index.get_indexer([impulse_ts], method="ffill")[0]
+    if loc < scan_depth + range_lookback:
+        return "NONE", 0, 0
+
+    m5_h = m5["high"].values
+    m5_l = m5["low"].values
+    m5_c = m5["close"].values
+    atr_v = m5_atr.values
+
+    # For each M5 bar in scan window, check if a rolling range is "flat"
+    # flat_flag[k] = True means "the range_lookback bars ending at bar k are tight"
+    flat_flags = []  # oldest(0) → newest(scan_depth-1)
+    for offset in range(scan_depth, 0, -1):
+        idx = loc - offset
+        if idx < range_lookback:
+            flat_flags.append(False)
+            continue
+        rng_h = max(m5_h[idx - j] for j in range(range_lookback))
+        rng_l = min(m5_l[idx - j] for j in range(range_lookback))
+        rng_w = rng_h - rng_l
+        a = atr_v[idx]
+        if np.isnan(a) or a <= 0:
+            flat_flags.append(False)
+            continue
+        flat_flags.append(rng_w <= a * range_atr_mult)
+
+    # Also check current bar (impulse time)
+    rng_h_now = max(m5_h[loc - j] for j in range(range_lookback))
+    rng_l_now = min(m5_l[loc - j] for j in range(range_lookback))
+    rng_w_now = rng_h_now - rng_l_now
+    a_now = atr_v[loc]
+    current_flat = (not np.isnan(a_now) and a_now > 0 and rng_w_now <= a_now * range_atr_mult)
+
+    # Scan from newest to oldest: find most recent flat streak, then breakout
+    i = len(flat_flags) - 1  # newest in scan window (1 bar before impulse)
+
+    # If current bar is also flat → STILL_FLAT
+    if current_flat:
+        flat_count = 1
+        while i >= 0 and flat_flags[i]:
+            flat_count += 1
+            i -= 1
+        if flat_count >= 2:
+            return "STILL_FLAT", flat_count, 0
+        return "NONE", 0, 0
+
+    # Skip non-flat bars (= breakout period) from the newest side
+    breakout_bars = 0
+    while i >= 0 and not flat_flags[i]:
+        breakout_bars += 1
+        i -= 1
+
+    if i < 0:
+        return "NONE", 0, 0
+
+    # Count flat bars
+    flat_end_i = i  # last flat bar in scan window
+    flat_count = 0
+    while i >= 0 and flat_flags[i]:
+        flat_count += 1
+        i -= 1
+
+    if flat_count < 2:  # minimum 2 M5 bars (10 min) of flat
+        return "NONE", 0, 0
+
+    # Determine breakout direction: close of the first non-flat bar after flat
+    # flat_end_i is the last flat bar, flat_end_i+1 is first breakout bar
+    first_bo_offset = scan_depth - flat_end_i  # offset from loc
+    first_bo_idx = loc - first_bo_offset + 1
+    if first_bo_idx < range_lookback or first_bo_idx >= len(m5_c):
+        return "NONE", 0, 0
+
+    # Range high/low at flat end
+    flat_end_abs_idx = loc - (scan_depth - flat_end_i)
+    fh = max(m5_h[flat_end_abs_idx - j] for j in range(range_lookback))
+    fl = min(m5_l[flat_end_abs_idx - j] for j in range(range_lookback))
+
+    bo_close = m5_c[first_bo_idx]
+    if bo_close > fh:
+        breakout_dir = "LONG"
+    elif bo_close < fl:
+        breakout_dir = "SHORT"
+    else:
+        # Close didn't break range — check current close
+        cur_close = m5_c[loc]
+        if cur_close > fh:
+            breakout_dir = "LONG"
+        elif cur_close < fl:
+            breakout_dir = "SHORT"
+        else:
+            return "NONE", 0, 0
+
+    bars_since = breakout_bars + 1  # +1 for current bar
+    return breakout_dir, flat_count, bars_since
+
+
 def evaluate_filters(result: TradeResult,
                      m1: pd.DataFrame,
                      m15_ema21: pd.Series, m15_ema50: pd.Series, m15_atr: pd.Series,
-                     m5_sma: pd.Series, m5_atr: pd.Series):
+                     m5_sma: pd.Series, m5_atr: pd.Series,
+                     m5: pd.DataFrame = None):
     d = result.impulse.direction
     impulse_ts = m1.index[result.impulse.bar_idx]
     dir_str = "LONG" if d == Dir.LONG else "SHORT"
@@ -597,6 +715,23 @@ def evaluate_filters(result: TradeResult,
     else:
         result.loose_pass = True
         result.loose_reason = "PASS"
+
+    # ═══ M5 Flat-Breakout analysis ═══
+    if m5 is not None:
+        fb_dir, fb_dur, fb_since = _m5_flat_breakout(m5, m5_atr, impulse_ts)
+    else:
+        fb_dir, fb_dur, fb_since = "NONE", 0, 0
+    result.flat_breakout_dir = fb_dir
+    result.flat_duration = fb_dur
+    result.flat_bars_since = fb_since
+    if fb_dir == "STILL_FLAT":
+        result.flat_match = "STILL_FLAT"
+    elif fb_dir == "NONE":
+        result.flat_match = "NO_FLAT"
+    elif fb_dir == dir_str:
+        result.flat_match = "MATCH"
+    else:
+        result.flat_match = "MISMATCH"
 
 # ═══════════════════════════════════════════════════════════════════════
 # 6. Exit simulation (EMA cross on M1 + StructBreak + TimeExit)
@@ -770,7 +905,7 @@ def _print_results(results: list[TradeResult], label: str):
     print(header)
     print("-" * len(header))
 
-    for r in results:
+    for r in base_results:
         d_str = "LONG" if r.direction == Dir.LONG else "SHORT"
         t = r.impulse_time[:19] if r.impulse_time else ""
         rng = f"{r.impulse.range_pts:.1f}"
@@ -856,158 +991,157 @@ def main():
     impulses = detect_impulses(m1, m1_atr)
     print(f"    Raw impulses found: {len(impulses)}")
 
-    # ── Fib vs ATR retrace comparison, TE=12 fixed, RT=25 fixed ──
+    # ── Fib50-618 fixed, M5 flat-breakout analysis with range_atr_mult sweep ──
     TIME_EXIT_FIXED = 12
     RT_FIXED = 25
+    RANGE_ATR_MULTS = [1.0, 1.5, 2.0, 2.5, 3.0]
 
-    # Variants: Fib baseline + ATR retrace with different multipliers
-    variants: list[dict] = [
-        {"label": "Fib50-618", "band_mode": "50_618", "atr_mult": 0.0},
-        {"label": "ATR×1.5",   "band_mode": "atr_retrace", "atr_mult": 1.5},
-        {"label": "ATR×2.0",   "band_mode": "atr_retrace", "atr_mult": 2.0},
-        {"label": "ATR×2.5",   "band_mode": "atr_retrace", "atr_mult": 2.5},
-        {"label": "ATR×3.0",   "band_mode": "atr_retrace", "atr_mult": 3.0},
-        {"label": "ATR×3.5",   "band_mode": "atr_retrace", "atr_mult": 3.5},
-    ]
+    print(f"[4] M5 Flat-Breakout analysis (Fib50-618, RT={RT_FIXED}, TE={TIME_EXIT_FIXED})")
 
-    print(f"[4] Fib vs ATR retrace comparison (RT={RT_FIXED}, TE={TIME_EXIT_FIXED})")
+    def _grp_stats(trades):
+        if not trades:
+            return {"trades": 0, "wins": 0, "win_rate": 0, "avg_pnl": 0,
+                    "tot_pnl": 0, "pf": 0, "exit_reasons": {}}
+        wins = [t for t in trades if t.pnl_pips > 0]
+        losses = [t for t in trades if t.pnl_pips <= 0]
+        gw = sum(t.pnl_pips for t in wins) if wins else 0
+        gl = abs(sum(t.pnl_pips for t in losses)) if losses else 0
+        er: dict[str, int] = {}
+        for t in trades:
+            er[t.exit_reason] = er.get(t.exit_reason, 0) + 1
+        return {
+            "trades": len(trades),
+            "wins": len(wins),
+            "win_rate": 100 * len(wins) / len(trades),
+            "avg_pnl": float(np.mean([t.pnl_pips for t in trades])),
+            "tot_pnl": sum(t.pnl_pips for t in trades),
+            "pf": gw / gl if gl > 0 else float("inf"),
+            "exit_reasons": er,
+        }
 
-    all_stats: dict[str, dict] = {}
-
-    for v in variants:
-        label = v["label"]
-        print(f"\n{'=' * 70}")
-        print(f"  {label}  (RT={RT_FIXED}, TE={TIME_EXIT_FIXED})")
-        print(f"{'=' * 70}\n")
-
-        results: list[TradeResult] = []
-        last_done_bar = 0
-
-        for imp_orig in impulses:
-            imp = copy.deepcopy(imp_orig)
-            if imp.bar_idx <= last_done_bar:
-                continue
-
-            tr = run_entry_logic(imp, m1, m1_atr,
-                                 retouch_limit=RT_FIXED,
-                                 band_mode=v["band_mode"],
-                                 atr_retrace_mult=v["atr_mult"])
-            evaluate_filters(tr, m1, m15_ema21, m15_ema50, m15_atr, m5_sma, m5_atr)
-
-            if tr.entry_bar is not None:
-                simulate_exit(tr, m1, m1_atr, time_exit_bars=TIME_EXIT_FIXED)
-                last_done_bar = tr.exit_bar if tr.exit_bar is not None else tr.entry_bar + 30
-            else:
-                last_done_bar = imp.bar_idx + 10
-
-            results.append(tr)
-
-        stats = _print_results(results, label)
-        all_stats[label] = stats
-
-    # ── Comparison table (Base(CRYPTO) filter) ──
-    print("\n" + "=" * 90)
-    print("FIB vs ATR RETRACE COMPARISON  (Base(CRYPTO), RT=25, TE=12)")
-    print("=" * 90)
-
-    col_keys = [v["label"] for v in variants]
-    col_width = 13
-
-    print(f"\n  {'Metric':<14}", end="")
-    for k in col_keys:
-        print(f" {k:>{col_width}}", end="")
-    print()
-    print("  " + "-" * (14 + (col_width + 1) * len(col_keys)))
-
-    for metric in ["trades", "wins", "win_rate", "avg_pnl", "tot_pnl", "pf"]:
-        print(f"  {metric:<14}", end="")
-        for k in col_keys:
-            fs = all_stats[k]["filter_stats"]["Base(CRYPTO)"]
-            if metric == "win_rate":
-                print(f" {fs[metric]:>{col_width - 1}.1f}%", end="")
-            elif metric in ("avg_pnl", "tot_pnl"):
-                print(f" {fs[metric]:>{col_width}.1f}", end="")
-            elif metric == "pf":
-                print(f" {fs[metric]:>{col_width}.2f}", end="")
-            else:
-                print(f" {fs[metric]:>{col_width}}", end="")
-        print()
-
-    # Reject breakdown
-    print(f"\n  {'Rejects':<14}", end="")
-    for k in col_keys:
-        print(f" {all_stats[k]['rejects']:>{col_width}}", end="")
-    print()
-
-    all_rej = set()
-    for s in all_stats.values():
-        all_rej.update(s["reject_counts"].keys())
-    for stage in sorted(all_rej):
-        print(f"  {stage:<14}", end="")
-        for k in col_keys:
-            cnt = all_stats[k]["reject_counts"].get(stage, 0)
-            print(f" {cnt:>{col_width}}", end="")
-        print()
-
-    # Exit reason
-    print(f"\n  {'Exit':<14}", end="")
-    for k in col_keys:
-        print(f" {k:>{col_width}}", end="")
-    print()
-    print("  " + "-" * (14 + (col_width + 1) * len(col_keys)))
-
-    all_exits = set()
-    for s in all_stats.values():
-        all_exits.update(s["filter_stats"]["Base(CRYPTO)"]["exit_reasons"].keys())
-    for er in sorted(all_exits):
-        print(f"  {er:<14}", end="")
-        for k in col_keys:
-            cnt = all_stats[k]["filter_stats"]["Base(CRYPTO)"]["exit_reasons"].get(er, 0)
-            print(f" {cnt:>{col_width}}", end="")
-        print()
-
-    # ── CSV output (best) ──
-    csv_path = os.path.join(script_dir, "sim_dat", "sim_results_crypto.csv")
-    best_key = max(col_keys, key=lambda k: all_stats[k]["filter_stats"]["Base(CRYPTO)"]["pf"]
-                   if all_stats[k]["filter_stats"]["Base(CRYPTO)"]["trades"] > 0 else 0)
-    best_fs = all_stats[best_key]["filter_stats"]["Base(CRYPTO)"]
-    print(f"\n  Best: {best_key}  (PF={best_fs['pf']:.2f}, WR={best_fs['win_rate']:.1f}%, "
-          f"TotPnL={best_fs['tot_pnl']:.0f})")
-
-    # Find best variant params
-    best_v = [v for v in variants if v["label"] == best_key][0]
-    csv_results: list[TradeResult] = []
+    # First, run once to get base results (flat analysis is done per-mult below)
+    base_results: list[TradeResult] = []
     last_done_bar = 0
     for imp_orig in impulses:
         imp = copy.deepcopy(imp_orig)
         if imp.bar_idx <= last_done_bar:
             continue
-        tr = run_entry_logic(imp, m1, m1_atr, retouch_limit=RT_FIXED,
-                             band_mode=best_v["band_mode"],
-                             atr_retrace_mult=best_v["atr_mult"])
-        evaluate_filters(tr, m1, m15_ema21, m15_ema50, m15_atr, m5_sma, m5_atr)
+        tr = run_entry_logic(imp, m1, m1_atr,
+                             retouch_limit=RT_FIXED, band_mode="50_618")
+        evaluate_filters(tr, m1, m15_ema21, m15_ema50, m15_atr, m5_sma, m5_atr, m5)
         if tr.entry_bar is not None:
             simulate_exit(tr, m1, m1_atr, time_exit_bars=TIME_EXIT_FIXED)
             last_done_bar = tr.exit_bar if tr.exit_bar is not None else tr.entry_bar + 30
         else:
             last_done_bar = imp.bar_idx + 10
-        csv_results.append(tr)
+        base_results.append(tr)
 
+    _print_results(base_results, "Fib50-618")
+
+    # Now sweep range_atr_mult for flat detection
+    has_entry_base = [r for r in base_results
+                      if r.entry_bar is not None and r.base_pass and r.exit_reason]
+
+    for ram in RANGE_ATR_MULTS:
+        print(f"\n{'=' * 80}")
+        print(f"M5 FLAT-BREAKOUT (range_atr_mult={ram:.1f}, range_lb=8, scan=24)")
+        print(f"  Base(CRYPTO) trades with entry: {len(has_entry_base)}")
+        print(f"{'=' * 80}")
+
+        # Re-evaluate flat for each trade
+        for r in base_results:
+            impulse_ts = m1.index[r.impulse.bar_idx]
+            dir_str = "LONG" if r.direction == Dir.LONG else "SHORT"
+            fb_dir, fb_dur, fb_since = _m5_flat_breakout(
+                m5, m5_atr, impulse_ts, range_atr_mult=ram)
+            r.flat_breakout_dir = fb_dir
+            r.flat_duration = fb_dur
+            r.flat_bars_since = fb_since
+            if fb_dir == "STILL_FLAT":
+                r.flat_match = "STILL_FLAT"
+            elif fb_dir == "NONE":
+                r.flat_match = "NO_FLAT"
+            elif fb_dir == dir_str:
+                r.flat_match = "MATCH"
+            else:
+                r.flat_match = "MISMATCH"
+
+        groups = {"MATCH": [], "MISMATCH": [], "NO_FLAT": [], "STILL_FLAT": []}
+        for r in has_entry_base:
+            g = r.flat_match if r.flat_match in groups else "NO_FLAT"
+            groups[g].append(r)
+
+        col_keys = ["ALL", "MATCH", "MISMATCH", "STILL_FLAT", "NO_FLAT"]
+        col_width = 14
+
+        grp_s = {
+            "ALL": _grp_stats(has_entry_base),
+            "MATCH": _grp_stats(groups["MATCH"]),
+            "MISMATCH": _grp_stats(groups["MISMATCH"]),
+            "STILL_FLAT": _grp_stats(groups["STILL_FLAT"]),
+            "NO_FLAT": _grp_stats(groups["NO_FLAT"]),
+        }
+
+        print(f"\n  {'Metric':<14}", end="")
+        for k in col_keys:
+            print(f" {k:>{col_width}}", end="")
+        print()
+        print("  " + "-" * (14 + (col_width + 1) * len(col_keys)))
+
+        for metric in ["trades", "wins", "win_rate", "avg_pnl", "tot_pnl", "pf"]:
+            print(f"  {metric:<14}", end="")
+            for k in col_keys:
+                fs = grp_s[k]
+                if metric == "win_rate":
+                    print(f" {fs[metric]:>{col_width - 1}.1f}%", end="")
+                elif metric in ("avg_pnl", "tot_pnl"):
+                    print(f" {fs[metric]:>{col_width}.1f}", end="")
+                elif metric == "pf":
+                    print(f" {fs[metric]:>{col_width}.2f}", end="")
+                else:
+                    print(f" {fs[metric]:>{col_width}}", end="")
+            print()
+
+        # Flat duration & bars_since
+        for gname in ["MATCH", "MISMATCH"]:
+            if groups[gname]:
+                durations = [r.flat_duration for r in groups[gname]]
+                sinces = [r.flat_bars_since for r in groups[gname]]
+                print(f"\n  {gname} flat_dur (M5): "
+                      f"min={min(durations)} avg={np.mean(durations):.1f} max={max(durations)}")
+                print(f"  {gname} bars_since (M5): "
+                      f"min={min(sinces)} avg={np.mean(sinces):.1f} max={max(sinces)}")
+
+        # Distribution for ALL impulses
+        fb_counts = {"MATCH": 0, "MISMATCH": 0, "STILL_FLAT": 0, "NO_FLAT": 0}
+        for r in base_results:
+            g = r.flat_match if r.flat_match in fb_counts else "NO_FLAT"
+            fb_counts[g] += 1
+        print(f"\n  All {len(base_results)} impulses:")
+        for k, v in fb_counts.items():
+            print(f"    {k:<12} {v:>5}  ({100*v/len(base_results):.1f}%)")
+
+    # ── CSV output ──
+    csv_path = os.path.join(script_dir, "sim_dat", "sim_results_crypto.csv")
     rows = []
-    for r in csv_results:
+    for r in base_results:
         rows.append({
             "ImpulseTime": r.impulse_time,
             "Direction": "LONG" if r.direction == Dir.LONG else "SHORT",
             "RangePts": round(r.impulse.range_pts, 1),
             "SpreadAtFreeze": round(r.impulse.spread_at_freeze, 0),
             "BandWidth": round(r.impulse.band_width / point(), 1),
-            "BandCenter": round(r.impulse.fib50, 2),
-            "BandMode": best_v["band_mode"],
+            "Fib50": round(r.impulse.fib50, 2),
+            "Fib618": round(r.impulse.fib618, 2),
             "ConfirmType": r.confirm_type,
             "RejectStage": r.reject_stage,
             "Baseline": r.baseline_reason,
             "Base_CRYPTO": r.base_reason,
             "Loose": r.loose_reason,
+            "FlatBreakout": r.flat_breakout_dir,
+            "FlatMatch": r.flat_match,
+            "FlatDuration": r.flat_duration,
+            "FlatBarsSince": r.flat_bars_since,
             "EntryPrice": round(r.entry_price, 2) if r.entry_bar else "",
             "SL": round(r.sl_price, 2) if r.entry_bar else "",
             "ExitPrice": round(r.exit_price, 2) if r.exit_bar else "",
@@ -1018,7 +1152,7 @@ def main():
         })
     df_out = pd.DataFrame(rows)
     df_out.to_csv(csv_path, index=False)
-    print(f"\nCSV written ({best_key}): {csv_path}  ({len(df_out)} rows)")
+    print(f"\nCSV written: {csv_path}  ({len(df_out)} rows)")
 
 
 if __name__ == "__main__":

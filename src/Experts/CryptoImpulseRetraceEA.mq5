@@ -194,6 +194,9 @@ int               g_exitPendingBars    = 0;
 // ATRハンドル
 int               g_atrHandleM1        = INVALID_HANDLE;
 
+// Status Panel
+int               g_panelMaxRow        = 0;
+
 //+------------------------------------------------------------------+
 //| Remaining Module Includes                                          |
 //+------------------------------------------------------------------+

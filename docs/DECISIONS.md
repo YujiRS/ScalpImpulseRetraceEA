@@ -1,7 +1,8 @@
-# DECISIONS.md — GoldBreakoutFilterEA v2.0
+# DECISIONS.md — ScalpImpulseRetraceEA リポジトリ
 
 > 本ファイルは「なぜそうしたか」の正典。
 > 設計判断の理由・没案・変更可否を記録する。
+> Part 1（3市場EA群）と Part 2（ブレイクアウト戦略）の両方を対象とする。
 
 ---
 
@@ -227,7 +228,7 @@
 
 - **日付:** 不明（コード調査で判明）
 - **状況:** EMA Cross Filter（M15）のSlow側をInputにするかハードコードにするか
-- **決定:** Fast Period（=20）のみInput化。Slow=50はEntryEngine内でハードコード（TrendFilterのEMA50を共用）
+- **決定:** GOLD: Fast=EMA20(Input), Slow=EMA50(ハードコード)。CRYPTO: EMA21 vs EMA50（TrendFilter内蔵）。FX: EMA Cross Filterなし
 - **理由:** 推定: TrendFilterのEMA50傾きと同じEMAを使うことで「同じトレンド軸で判定を統一」する意図。ただし明示的な記録なし
 - **没案:** 不明
 - **影響:** **要確認** — Slow PeriodもInput化するかは今後の判断
@@ -245,10 +246,25 @@
 
 ---
 
+### [ADR-016] 市場ごとに独立EAとして実装（単一EA+MarketMode切替ではなく）
+
+- **日付:** 不明（コード構成から判明）
+- **状況:** 3市場対応を1つのEAでMarketMode切替にするか、市場ごとに独立EAにするか
+- **決定:** 市場ごとに独立EA（GoldBreakoutFilterEA / FXRetracePulseEA / CryptoImpulseRetraceEA）。共通アーキテクチャ（状態遷移・モジュール構成）は同一だが、MarketProfile・EntryEngine・ImpulseDetector等の実装が市場ごとに異なる
+- **理由:** 推定:
+  - 市場固有の追加フィルタ（FX: M5 Slope、CRYPTO: FlatFilter）が異なり、単一EA内の分岐が複雑になるのを回避
+  - Confirm条件・Freeze条件・FreezeCancel条件が市場で根本的に異なるため、if分岐よりファイル分離の方が保守性が高い
+  - Input定義も市場固有サフィックス（`_GOLD`/`_FX`/`_CRYPTO`）で完全分離
+- **没案:** 単一EA + MarketMode Input → 条件分岐が全モジュールに波及し複雑化
+- **影響:** **固定**。新市場追加時は新規EAとして作成
+
+---
+
 ## 未記録の意思決定（コードから推定されるが根拠不明）
 
 以下はコードや仕様書から存在が確認できるが、「なぜそうしたか」の記録が見つからなかったもの。
 
 1. **EMA Cross Filter と TrendFilter の棲み分け** — TrendFilter（EMA50傾き）は「トレンド方向の有無」を判定、EMA Cross Filter（EMA20 vs EMA50位置関係）は「トレンドの勢い」を判定していると推測されるが、両方必要な理由の記録がない
 2. **Impulse Exceed Filter（ImpulseExceedMax=3.0）の閾値根拠** — 過伸長Impulseを弾くフィルタだが、3.0倍の根拠となるバックテスト等が不明
-3. **Visualization の色設定** — 視認性の検証背景が不明（優先度低）
+3. **FX M5 Slope FilterがTrendDir=FLATでも通過可能な理由** — GOLD/CRYPTOではFLAT=Rejectだが、FXだけM5 Slopeで救済できる設計の背景が不明
+4. **CRYPTO FlatFilter の3モード設計** — OFF/FlatGuard/FlatMatchの3モードにした理由（なぜ2モードではないか）が不明

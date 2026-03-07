@@ -3,6 +3,7 @@
 > 本ファイルは「何を作るか」「何を満たせばOKか」の正典。
 > 新しいチャットでは「SPEC.md を読んだ上で〜して」と指示すれば文脈が揃う。
 > 本リポジトリには複数のEA戦略が含まれる。Part 1 が主力EA、Part 2 以降は別戦略。
+> Part 3: RoleReversalEA（5分足ロールリバーサル×MTF分析）を追加。
 
 ---
 
@@ -481,3 +482,226 @@ Asian Session  →  London/NY Open  →  Breakout  →  Hold  →  Exit
 1. サーバー時間の扱い: XMTrading GMT+2/GMT+3 前提だが、ブローカー移行時にInput調整で対応可能か
 2. 重要指標フィルタ（FOMC, NFP, CPI等）: 将来拡張として検討中。MQL5の経済カレンダーAPIで対応可能
 3. 想定パフォーマンス（勝率40-50%, RR 1:2〜1:5）の実データでの検証が未実施
+
+---
+---
+
+# Part 3: RoleReversalEA — 5分足ロールリバーサル×MTF分析
+
+> Part 1（Impulse→Retrace）/ Part 2（ブレイクアウト×モメンタム）とは**完全に別コンセプト**の戦略。
+> H1のサポレジ転換（Role Reversal）を5分足でエントリーする、N字波動の「初押し・初戻り」を狙うEA。
+> 独立した新規EAとして設計。
+
+## このシステムが解く問題（WHY）
+
+- H1で意識される水平線（S/R）をブレイク後、**元のレジスタンスがサポートに転換（またはその逆）する地点**で、5分足のプライスアクション確認付きでエントリーする
+- 「含み損勢力の救済注文（建値決済）」と「新規追随勢力の参入」が同一価格帯で衝突する構造的優位性を利用
+- H1の利幅ターゲット × M5のタイトなSLで、数学的に高いリスクリワード比（1:2以上）を確保
+
+## 対象ユーザーとユースケース（WHAT）
+
+- **対象**: MT5で5分足ベースのスイング寄りスキャルピングを行うトレーダー
+- **対象市場**: GOLD / FX / CRYPTO（市場を問わないユニバーサル設計。単一EA）
+- **運用形態**: VPS上での稼働を想定。London/NYセッション限定
+
+---
+
+## 主要ビジネスルール・制約
+
+### 1. MTF階層構造
+
+| 時間足 | 役割 | 監視項目 |
+|--------|------|---------|
+| H1 | 環境認識（マクロ） | 主要S/Rの特定。Swing High/Low検出 |
+| M15 | 方向性確認（メゾ） | EMA50とCloseの位置関係でトレンド方向フィルタ |
+| M5 | 執行（ミクロ） | ブレイクアウト検出、プルバック監視、EMA25確認、Confirm判定 |
+
+### 2. 状態遷移（ステートマシン）
+
+```
+IDLE → BREAKOUT_DETECTED → BREAKOUT_CONFIRMED → WAITING_PULLBACK
+  → (Confluence確認) → IN_POSITION → COOLDOWN → IDLE
+```
+
+| StateID | State | 意味 |
+|---------|-------|------|
+| 0 | IDLE | 待機中。S/Rブレイクアウトを監視 |
+| 1 | BREAKOUT_DETECTED | M5終値がS/Rレベルを横断。確認中 |
+| 2 | BREAKOUT_CONFIRMED | 連続N本のClose確認でブレイク確定 |
+| 3 | WAITING_PULLBACK | ブレイクしたレベルへの価格回帰を待機 |
+| 4 | PULLBACK_AT_LEVEL | レベル到達。コンフルエンス条件確認中 |
+| 5 | ENTRY_READY | 全条件成立。エントリー可能 |
+| 6 | IN_POSITION | ポジション保有中（SL/TPで自動決済） |
+| 7 | COOLDOWN | クールダウン（1本後にIDLE） |
+
+### 3. H1 S/R検出
+
+- **方式**: Swing High/Low検出（各方向N本の比較）
+- **SwingLookback**: 7本（各側。H1 = 7時間分）— パラメータスイープで最適化済
+- **マージ**: 近接レベルをATR × MergeTolerance で統合（重複排除）
+- **タッチカウント**: マージ後にH1バーでの接触回数を集計
+- **最大年齢**: MaxAge（H1バー数）超過のレベルは無視
+- **リフレッシュ**: SR_RefreshInterval（12 H1バー = 12時間）ごとに再検出。broken/used状態は引き継ぎ
+
+### 4. ブレイクアウト検出（M5）
+
+- **条件**: 前バーCloseがレベル以下（以上）→ 現バーCloseがレベル以上（以下）に横断
+- **Body比率**: BreakoutBodyRatio（0.3）以上で有効なブレイク足と判定
+- **確認**: BO_ConfirmBars（2本）連続でCloseがレベルの外側にあること
+- **M15トレンドフィルタ**: M15 Close vs M15 EMA50。ブレイク方向と不一致ならReject
+
+### 5. プルバック（ロールリバーサル）検出
+
+- **ゾーン定義**: レベル ± ATR(M5) × PB_ZoneATR
+- **待機**: PB_MinBars〜PB_MaxBars の間でゾーン到達を監視
+- **ゾーン到達判定**:
+  - Long: Low ≤ レベル+zone かつ Close ≥ レベル−zone×0.5
+  - Short: High ≥ レベル−zone かつ Close ≤ レベル+zone×0.5
+- **全戻し判定**: Close がレベルから zone×2 以上逆行 → レベルを破棄（構造破綻）
+- **タイムアウト**: PB_MaxBars（120 = 10時間）超過 → レベルを使用済みに
+
+### 6. コンフルエンス条件（プルバック到達後）
+
+4条件すべて成立でエントリー:
+
+1. **EMAトレンド**: EMA(M5,25) が EMA_TrendLookback バー前より方向一致
+2. **EMAサポート/レジスタンス**: Long: Low ≥ EMA−zone かつ Close > EMA / Short: High ≤ EMA+zone かつ Close < EMA
+3. **Confirmパターン**: 以下のいずれか1つが成立（優先順位順）
+
+| パターン | 条件概要 |
+|---------|---------|
+| Key Reversal | 直近N本の新安値（新高値）+ 前バーClose超え + 上（下）半分でClose + 方向一致Body |
+| Engulfing | 前バー実体を包む逆方向実体。Body比率 ≥ 0.5 |
+| Pin Bar | Body/Range ≤ 0.35、反転方向ヒゲ ≥ Body×2、Close位置 0.6以上（0.4以下） |
+
+4. **R:R検証**: SL距離 ≤ ATR × MaxSL_ATR（2.0）かつ TP/SL ≥ MinRR（2.0）
+
+### 7. SL/TP計算
+
+| 項目 | Long | Short |
+|------|------|-------|
+| SL | シグナル足Low − SL_BufferPoints | シグナル足High + SL_BufferPoints |
+| TP (Fixed R:R) | Entry + SL距離 × MinRR | Entry − SL距離 × MinRR |
+| TP (次H1レベル) | 次の未ブレイクS/Rレベル（MinRR未満なら固定R:Rにフォールバック） |
+
+### 8. 時間フィルタ
+
+- **執行可能時間**: TradeHourStart（8）〜 TradeHourEnd（21）UTC
+- **根拠**: London 08:00-16:00 + NY 13:00-21:00 の合算。アジア時間の低流動性を排除
+
+### 9. 注文方式
+
+- 成行（Market）エントリー
+- Filling Mode 自動判定（FOK/IOC/RETURN）
+- Deviation: 20 points
+- ロット: FIXED または RISK_PERCENT（Equity基準）
+
+### 10. 決済仕様
+
+サーバーSL/TPを注文時に設定。EAによる能動的決済ロジックなし（SL/TPヒットで自動決済）。
+
+---
+
+## 入出力定義
+
+### 入力（Input）
+
+| グループ | 項目 | 初期値 | 備考 |
+|---------|------|--------|------|
+| G1:運用 | EnableTrading | true | false時はシグナルログのみ |
+| G1 | LotMode | FIXED | FIXED/RISK_PERCENT |
+| G1 | FixedLot | 0.01 | |
+| G1 | RiskPercent | 1.0 | RISK_PERCENT時のみ |
+| G1 | LogLevel | NORMAL | NORMAL/DEBUG/ANALYZE |
+| G1 | MagicOffset | 0 | Magic = 20260307 + Offset |
+| G2:S/R検出 | SR_SwingLookback | 7 | H1スイングの片側本数 |
+| G2 | SR_MergeTolerance | 0.5 | ATR比率でのマージ閾値 |
+| G2 | SR_MaxAge | 200 | H1バーでの最大年齢 |
+| G2 | SR_MinTouches | 2 | 最小タッチ回数 |
+| G2 | SR_RefreshInterval | 12 | S/R再検出間隔（H1バー数） |
+| G3:ブレイクアウト | BO_BodyRatio | 0.3 | ブレイク足の最小Body比率 |
+| G3 | BO_ConfirmBars | 2 | 確認用連続Close本数 |
+| G4:プルバック | PB_ZoneATR | 0.5 | ゾーン幅（ATR比率） |
+| G4 | PB_MaxBars | 120 | 最大待機（M5バー数） |
+| G4 | PB_MinBars | 2 | 最小待機（M5バー数） |
+| G5:EMA | EMA_Period | 25 | M5 EMA期間 |
+| G5 | EMA_TrendLookback | 3 | EMAトレンド確認バー数 |
+| G6:Confirm | KR_Lookback | 5 | Key Reversal参照本数 |
+| G6 | KR_BodyMinRatio | 0.3 | Key Reversal最小Body比率 |
+| G6 | KR_ClosePosition | 0.45 | Key ReversalのClose位置閾値 |
+| G6 | Engulf_BodyMinRatio | 0.5 | Engulfing最小Body比率 |
+| G6 | Pin_BodyMaxRatio | 0.35 | Pin Bar最大Body比率 |
+| G6 | Pin_WickRatio | 2.0 | Pin Barヒゲ/Body比率 |
+| G7:R/R | MinRR | 2.0 | 最小リスクリワード比 |
+| G7 | MaxSL_ATR | 2.0 | SL上限（ATR倍率） |
+| G7 | SL_BufferPoints | 50 | SLバッファ（points） |
+| G7 | UseFixedRR_TP | true | 固定R:R TP使用 |
+| G8:時間 | TradeHourStart | 8 | 執行開始（UTC） |
+| G8 | TradeHourEnd | 21 | 執行終了（UTC） |
+| G9:M15 | M15_TrendFilter | true | M15トレンドフィルタ |
+| G9 | M15_EMA_Period | 50 | M15 EMA期間 |
+| G10:通知 | EnableAlert | true | MT5 Alert |
+| G10 | EnablePush | false | Push通知 |
+| G11:表示 | EnableSRLines | true | S/R水平線描画 |
+| G11 | EnableStatusPanel | true | ステータスパネル表示 |
+
+### 出力
+
+- **チャート描画**:
+  - S/R水平線（Resistance=赤、Support=青、Broken=黄破線、Used=グレー点線）
+  - タッチ回数 ≥ 3 で太線描画
+  - プルバックゾーン矩形（Long=緑、Short=赤、半透明）
+- **ステータスパネル**: 左下に State / Direction / S/R数 / Session / Spread / P&L 等を表示
+- **ログ**: Print()ベース。LogLevel=DEBUG以上で詳細出力
+- **通知**: エントリー時のみ（Alert / Push）
+
+---
+
+## ファイル構成
+
+| ファイル | 役割 |
+|---------|------|
+| RoleReversalEA.mq5 | メインEA。State Machine、エントリー/ポジション管理 |
+| RoleReversalEA/Constants.mqh | 列挙型（State, Direction, ConfirmPattern）、構造体（SRLevel, TradeRecord） |
+| RoleReversalEA/SRDetector.mqh | H1 Swing High/Low検出、マージ、タッチカウント |
+| RoleReversalEA/ConfirmEngine.mqh | Key Reversal / Engulfing / Pin Bar 検出 |
+| RoleReversalEA/Visualization.mqh | S/R線描画、プルバックゾーン矩形、ステータスパネル |
+
+---
+
+## バックテスト結果（Pythonシミュレーション）
+
+> sim_role_reversal.py による検証。最適化後のパラメータ使用。
+
+| 市場 | 期間 | トレード数 | 勝率 | PF | PnL (pips) | Max DD (pips) |
+|------|------|-----------|------|-----|-----------|--------------|
+| GOLD | 2025/09-11 (3ヶ月) | 13 | 69% | 3.47 | +6,436 | 1,177 |
+| FX (USDJPY) | 2026/02 (2週間) | 5 | 60% | 2.66 | +236 | 142 |
+| CRYPTO (BTCUSD) | 2025/12-2026/02 (3ヶ月) | 9 | 33% | 1.24 | +35,550 | 76,820 |
+
+**パラメータスイープ結果（GOLD、81組合せ）**: SwingLookback=7が圧倒的に優位（PF 3.47 vs SL=5の1.20）。
+
+---
+
+## 受け入れ条件
+
+1. H1 Swing High/Lowに基づくS/Rレベルが正しく検出・マージされる
+2. M5終値のクロスでブレイクアウトが検出され、N本連続確認で確定する
+3. ブレイク後のプルバックがゾーン内到達で検出される
+4. コンフルエンス4条件（EMAトレンド、EMAサポート、Confirm、R:R）すべて成立時のみエントリーする
+5. 全戻し（構造破綻）時にレベルが正しく破棄される
+6. 時間フィルタ（London/NY）が機能し、アジア時間にエントリーが発生しない
+7. M15トレンドフィルタがブレイク方向と不一致時にRejectする
+8. SL/TPがシグナル足基準で正しく計算され、MinRR以上が確保される
+9. S/R水平線・プルバックゾーン・ステータスパネルが正しく描画される
+10. S/Rレベルが定期リフレッシュで更新され、broken/used状態が維持される
+
+---
+
+## 未解決・要確認事項
+
+1. **CRYPTOの低勝率**: WR 33%。R:Rで補っているが、パラメータ調整またはCRYPTO固有フィルタの追加を要検討
+2. **FXデータ量**: 2週間のみでの検証。統計的有意性に課題。追加データでの検証が必要
+3. **サーバー時間の扱い**: TradeHourStart/End はサーバー時間（≒UTC）前提。ブローカーのGMTオフセットによりInput調整が必要
+4. **S/R検出の計算コスト**: H1で最大200本のSwing検出を12時間ごとに実行。パフォーマンスへの影響は軽微と想定するが未計測
+5. **1レベル1トレード制限**: 現在、各S/Rレベルは1回のRole Reversalトレードで使い切り。再利用の可否は要検討

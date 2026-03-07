@@ -74,6 +74,10 @@ input int               M15_EMA_Period         = 50;             // M15 EMA Peri
 input bool              EnableAlert            = true;           // Alert on entry
 input bool              EnablePush             = false;          // Push notification on entry
 
+// === G11: Visualization ===
+input bool              EnableSRLines          = true;           // Draw S/R lines on chart
+input bool              EnableStatusPanel      = true;           // On-chart status display (左下)
+
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
@@ -101,6 +105,11 @@ ENUM_CONFIRM_PATTERN g_lastConfirm = CONFIRM_NONE;
 ulong         g_posTicket = 0;
 double        g_posSL = 0;
 double        g_posTP = 0;
+
+//+------------------------------------------------------------------+
+//| Module Includes (グローバル変数定義後)                               |
+//+------------------------------------------------------------------+
+#include "RoleReversalEA/Visualization.mqh"
 
 //+------------------------------------------------------------------+
 //| OnInit                                                             |
@@ -141,6 +150,9 @@ int OnInit()
             " touches=", g_srLevels[i].touch_count);
    }
 
+   // Draw S/R levels on chart
+   DrawSRLevels();
+
    // Check for existing position
    CheckExistingPosition();
 
@@ -154,6 +166,8 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   ClearChartStatusPanel();
+
    if(g_emaM5Handle != INVALID_HANDLE) IndicatorRelease(g_emaM5Handle);
    if(g_atrM5Handle != INVALID_HANDLE) IndicatorRelease(g_atrM5Handle);
    if(g_emaM15Handle != INVALID_HANDLE) IndicatorRelease(g_emaM15Handle);
@@ -188,6 +202,7 @@ void OnTick()
       if(g_h1BarsSinceRefresh >= SR_RefreshInterval)
       {
          RefreshSRLevels();
+         DrawSRLevels();
          g_h1BarsSinceRefresh = 0;
       }
    }
@@ -216,6 +231,16 @@ void OnTick()
          g_state = RR_IDLE;
          break;
    }
+
+   // Pullback Zone の右端を追従
+   if(g_state >= RR_WAITING_PULLBACK && g_state <= RR_PULLBACK_AT_LEVEL
+      && g_breakoutLevelIdx >= 0)
+   {
+      UpdatePullbackZoneEnd(g_breakoutLevelIdx);
+   }
+
+   // Status Panel 更新
+   UpdateChartStatusPanel();
 }
 
 //+------------------------------------------------------------------+
@@ -321,6 +346,13 @@ void ScanForBreakout()
          g_srLevels[i].broken_time = TimeCurrent();
          g_state = RR_BREAKOUT_DETECTED;
 
+         // S/Rライン更新＋プルバックゾーン描画
+         DrawSRLevels();
+         double atrBuf[];
+         ArraySetAsSeries(atrBuf, true);
+         CopyBuffer(g_atrM5Handle, 0, 0, 2, atrBuf);
+         if(ArraySize(atrBuf) > 0) DrawPullbackZone(i, atrBuf[0]);
+
          if(LogLevel >= RR_LOG_DEBUG)
             Print("BREAKOUT UP detected @ ", DoubleToString(levelPrice, _Digits),
                   " bar=", g_m5BarCount);
@@ -350,6 +382,12 @@ void ScanForBreakout()
          g_srLevels[i].broken_direction = RR_DIR_SHORT;
          g_srLevels[i].broken_time = TimeCurrent();
          g_state = RR_BREAKOUT_DETECTED;
+
+         DrawSRLevels();
+         double atrBuf2[];
+         ArraySetAsSeries(atrBuf2, true);
+         CopyBuffer(g_atrM5Handle, 0, 0, 2, atrBuf2);
+         if(ArraySize(atrBuf2) > 0) DrawPullbackZone(i, atrBuf2[0]);
 
          if(LogLevel >= RR_LOG_DEBUG)
             Print("BREAKOUT DOWN detected @ ", DoubleToString(levelPrice, _Digits),
@@ -783,6 +821,11 @@ bool CheckM15Trend(int direction)
 //+------------------------------------------------------------------+
 void ResetState()
 {
+   if(g_breakoutLevelIdx >= 0)
+   {
+      DeletePullbackZone(g_breakoutLevelIdx);
+      DrawSRLevels();
+   }
    g_breakoutLevelIdx = -1;
    g_breakoutDir = 0;
    g_breakoutBar = 0;

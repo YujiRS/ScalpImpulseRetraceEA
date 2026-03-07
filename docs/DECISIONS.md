@@ -223,12 +223,32 @@
 
 ---
 
+### [ADR-014] EMA Cross Filter の Slow Period をEMA50ハードコード
+
+- **日付:** 不明（コード調査で判明）
+- **状況:** EMA Cross Filter（M15）のSlow側をInputにするかハードコードにするか
+- **決定:** Fast Period（=20）のみInput化。Slow=50はEntryEngine内でハードコード（TrendFilterのEMA50を共用）
+- **理由:** 推定: TrendFilterのEMA50傾きと同じEMAを使うことで「同じトレンド軸で判定を統一」する意図。ただし明示的な記録なし
+- **没案:** 不明
+- **影響:** **要確認** — Slow PeriodもInput化するかは今後の判断
+
+---
+
+### [ADR-015] CooldownDuration = 3本（ハードコード）
+
+- **日付:** 不明（コード調査で判明）
+- **状況:** ポジション決済後、次のImpulse検出までの待機本数
+- **決定:** 3本（M1 = 3分）。g_cooldownDuration としてグローバル変数で定義（Constants.mqhではなくメインEAファイル）
+- **理由:** 推定: 決済直後の同一構造への再エントリーを防止する最小限のクールダウン
+- **没案:** 不明
+- **影響:** **変更可能** — Input化も検討可
+
+---
+
 ## 未記録の意思決定（コードから推定されるが根拠不明）
 
 以下はコードや仕様書から存在が確認できるが、「なぜそうしたか」の記録が見つからなかったもの。
 
-1. **EMA Cross Filter（EMA20 vs EMA50）の採用経緯** — TrendFilter（M15 EMA50傾き）とは別に、EMA Cross Filterが存在する。両者の棲み分けの判断根拠が不明
+1. **EMA Cross Filter と TrendFilter の棲み分け** — TrendFilter（EMA50傾き）は「トレンド方向の有無」を判定、EMA Cross Filter（EMA20 vs EMA50位置関係）は「トレンドの勢い」を判定していると推測されるが、両方必要な理由の記録がない
 2. **Impulse Exceed Filter（ImpulseExceedMax=3.0）の閾値根拠** — 過伸長Impulseを弾くフィルタだが、3.0倍の根拠となるバックテスト等が不明
-3. **Visualization の色設定（Blue/Gold/Purple）** — 市場別に色を分ける判断の背景（視認性検証等）が不明
-4. **CooldownBarsの値** — COOLDOWN → IDLE の解除条件（待機本数）の具体値と根拠が仕様書に明記されていない
-5. **SMA vs EMA の使い分け** — TrendFilterにEMA、Exit判定にもEMAを使用しているが、Confirm判定系ではSMAが一部残存。統一しなかった理由が不明
+3. **Visualization の色設定** — 視認性の検証背景が不明（優先度低）

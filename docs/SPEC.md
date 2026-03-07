@@ -12,7 +12,8 @@
 
 - M1足のImpulse（急騰/急落）後に発生する「押し（Retrace）」を狙い、構造的に有利な位置でエントリーするスキャルピングEA
 - 最速層（23.6/38.2の1回目タッチ）を追わず、**「Impulse完了確認 → 2回目タッチ → 反転確定」**の3段階で期待値を安定化する
-- FX / GOLD / CRYPTO の3市場に対応し、市場特性ごとにパラメータと許可レンジを分離する
+- 設計上は FX / GOLD / CRYPTO の3市場を想定し、市場特性ごとにパラメータと許可レンジを分離する
+- **現時点の実装はGOLD向け**。FX/CRYPTOはMarketProfile追加で対応予定（ロジック構造は共通）
 
 ---
 
@@ -35,6 +36,7 @@
 | CRYPTO | `CRYPTO` (BTCUSD, ETHUSD等) | 50〜61.8 常時ON。38.2はOptional（初期OFF） |
 
 MarketMode = AUTO の場合、Symbol名から自動判定。判定不能時はFX扱い（安全側）。
+**※ 現時点の実装ではMarketMode Inputは未実装。GOLD固定でInitMarketProfile()をロードする。FX/CRYPTO対応時にInput化予定。**
 
 ### 2. 状態遷移（ステートマシン）
 
@@ -58,11 +60,12 @@ IDLE → IMPULSE_FOUND → IMPULSE_CONFIRMED → FIB_ACTIVE → TOUCH_1
 **StateIDは変更禁止。**
 
 主要な遷移ルール:
-- IMPULSE_CONFIRMED → IDLE: RiskGateFail（取引価値なし判定）
+- IMPULSE_CONFIRMED → IDLE: RiskGateFail（取引価値なし判定）。ただし LogLevel=ANALYZE 時は下記SoftGateへ
 - IMPULSE_CONFIRMED → FIB_ACTIVE: RiskGatePass（Fib算出・凍結）
 - TOUCH_2_WAIT_CONFIRM → ENTRY_PLACED: Confirm成立
 - TOUCH_2_WAIT_CONFIRM → IDLE: ConfirmTimeLimitExpired
-- SoftGate経由（RiskGateSoftPass=1）: Confirm成立しても ENTRY_PLACED に遷移せず IDLE へ
+- **SoftGate（LogLevel=ANALYZE専用）**: RiskGateFail発生時にIDLE遷移せず、g_riskGateSoftPass=trueのまま後続ロジックを継続。Confirm到達時にRISK_GATE_SOFT_BLOCKでRejectしIDLEへ遷移（エントリーはしないが、どこまで進んだかを記録する分析用機能）
+- COOLDOWN → IDLE: CooldownDuration（3本、ハードコード）経過で遷移
 
 ### 3. Impulse検出・確定
 
@@ -107,8 +110,8 @@ IDLE → IMPULSE_FOUND → IMPULSE_CONFIRMED → FIB_ACTIVE → TOUCH_1
 ```
 DeepBandON = (G1 OR G2) AND (C1 OR C2 OR C3)
 
-G1: ATR(M1)/ATR(M1,長期) >= VolExpansionRatio（ボラ拡大）
-G2: ImpulseRangePts >= ATR(M1) × OverextensionMult（過伸長）
+G1: ATR(M1,14)/ATR(M1,50) >= VolExpansionRatio=1.5（ボラ拡大）
+G2: ImpulseRangePts >= ATR(M1) × OverextensionMult=2.5（過伸長）
 C1: SessionFlag = RiskOn（NY前半等）
 C2: 直近スイープ痕跡あり
 C3: スプレッド通常域
@@ -150,6 +153,17 @@ C3: スプレッド通常域
 - TrendDir = FLAT → Reject
 - ImpulseDir != TrendDir → Reject（逆張り禁止）
 
+#### EMA Cross Filter（M15）
+
+- EMA(FastPeriod, Input=20) vs EMA(50, ハードコード) の位置関係でフィルタ
+- LONG: emaFast > ema50 / SHORT: emaFast < ema50
+- TrendFilterとは独立した追加フィルタ（両方通過が必要）
+
+#### Impulse Exceed Filter（M15）
+
+- ImpulseRangePts / ATR(M15) > ImpulseExceedMax（Input=3.0）で過伸長としてReject
+- 過大なImpulseは「すでに走りきった」可能性が高いため弾く
+
 #### Reversal Guard（H1）
 
 | 市場 | 検出対象 |
@@ -162,15 +176,15 @@ C3: スプレッド通常域
 
 2回目タッチ成立後、M1確定足で判定:
 
-| 市場 | 採用Confirm | 優先順位 |
-|------|-----------|---------|
-| FX | Engulfing OR MicroBreak | Engulfing > MicroBreak |
-| GOLD | WickRejection OR MicroBreak | WickRejection > MicroBreak |
-| CRYPTO | MicroBreakのみ | — |
+| 市場 | 採用Confirm | 優先順位 | 実装状況 |
+|------|-----------|---------|---------|
+| FX | Engulfing OR MicroBreak | Engulfing > MicroBreak | 未実装 |
+| GOLD | **WickRejection OR MicroBreak** | WickRejection > MicroBreak | **実装済** |
+| CRYPTO | MicroBreakのみ | — | 未実装 |
 
-- **WickRejection**: ヒゲ比率 >= WickRatioMin（GOLD: 0.55）
-- **Engulfing**: 確定足実体が直前足実体を包む
-- **MicroBreak**: FX/GOLD=フラクタル固定型（左右2本）、CRYPTO=Lookback抽出型（3本）
+- **WickRejection**: ヒゲ比率 >= WickRatioMin（GOLD: 0.55）。帯内での反発をヒゲ長で確認
+- **MicroBreak**: フラクタル型（左右2本の極値ブレイク）
+- **Engulfing**: 定義はコード内に存在するが、GOLD Confirm評価では呼び出されていない（ReversalGuardでのみ使用）
 
 **同一Impulse内の最大エントリー回数: 1回（固定）。**
 
@@ -204,9 +218,9 @@ C3: スプレッド通常域
 IMPULSE_CONFIRMED → FIB_ACTIVE遷移直前に1回評価。
 
 RiskGateFail条件:
-1. 値幅不足（RangePtsがSpreadPts・帯幅・Leave距離に対して不足）
-2. RR不足（期待値幅に対し構造SLが遠すぎる）
-3. BandDominance（帯がImpulse全域を支配: BandDominanceRatio >= 0.85 でFail、FX主対象）
+1. 値幅不足（RangePtsがSpreadPts・帯幅・Leave距離に対して不足）→ range <= 2.0 points で即Fail
+
+BandDominanceRatio（帯幅/値幅比）はRISK_GATE_FAILログに記録されるが、現時点ではReject条件としては使用していない（分析用）。
 
 ### 11. EntryGate（注文直前の最終判定）
 
@@ -240,34 +254,70 @@ RiskGateFail条件:
 
 ### 入力（Input）
 
+> ※ 現時点の実装はGOLD専用のため、サフィックスは全て `_GOLD`。FX/CRYPTO対応時に市場別Input追加予定。
+
 | グループ | 項目 | 初期値 | 備考 |
 |---------|------|--------|------|
 | G1:運用 | EnableTrading | true | false時はロジック稼働・ログ出力のみ |
-| G1 | MarketMode | AUTO | FX/GOLD/CRYPTO/AUTO |
 | G1 | UseLimitEntry | true | |
 | G1 | UseMarketFallback | true | |
 | G1 | LotMode | FIXED | FIXED/RISK_PERCENT |
 | G1 | FixedLot | 0.01 | |
 | G1 | RiskPercent | 1.0 | RISK_PERCENT時のみ使用 |
 | G1 | LogLevel | NORMAL | NORMAL/DEBUG/ANALYZE |
-| G1 | RunId | 01 | ログ命名用 |
-| G1 | ExitMAFastPeriod | 13 | |
-| G1 | ExitMASlowPeriod | 21 | |
-| G1 | ExitConfirmBars | 1 | |
+| G1 | RunId | 1 | ログ命名用（int） |
+| G1 | LongDisableAbove | 0 | 指定レート以上でLong禁止（0=無効） |
+| G1 | ShortDisableBelow | 0 | 指定レート以下でShort禁止（0=無効） |
+| G1:通知 | EnableDialogNotification | true | MT5端末Alert |
+| G1 | EnablePushNotification | true | MT5 Push通知 |
+| G1 | EnableMailNotification | false | メール通知 |
+| G1 | EnableSoundNotification | false | サウンド通知 |
+| G1 | SoundFileName | "alert.wav" | |
+| G1:Exit | ExitMAFastPeriod | 13 | EMAクロス決済Fast |
+| G1 | ExitMASlowPeriod | 21 | EMAクロス決済Slow |
+| G1 | ExitConfirmBars | 1 | クロス確認本数 |
+| G1:フィルタ | TrendFilter_Enable | true | M15トレンドフィルタ |
+| G1 | TrendSlopeMult_GOLD | 0.07 | EMA50傾き閾値（ATR比率） |
+| G1 | TrendATRFloorPts_GOLD | 80.0 | ATR下限（強制FLAT判定） |
+| G1 | ReversalGuard_Enable | true | H1反転ガード |
+| G1 | ReversalEngulfing_Enable | true | Engulfing検出 |
+| G1 | ReversalBigBodyMult_GOLD | 1.0 | 大実体判定倍率 |
+| G1 | ReversalWickReject_Enable_GOLD | true | WickReject検出 |
+| G1 | ReversalWickRatioMin_GOLD | 0.60 | WickReject閾値 |
+| G1 | EMACrossFilter_Enable_GOLD | true | EMA Cross Filter |
+| G1 | EMACrossFilter_FastPeriod_GOLD | 20 | Fast EMA期間（Slow=50はハードコード） |
+| G1 | ImpulseExceed_Enable_GOLD | true | 過伸長フィルタ |
+| G1 | ImpulseExceed_MaxATR_GOLD | 3.0 | ATR(M15)×この値超でReject |
+| G1:表示 | EnableFibVisualization | true | Fib描画ON/OFF |
+| G1 | EnableStatusPanel | true | ステータスパネル表示 |
 | G2:安全弁 | MaxSpreadMode | ADAPTIVE | FIXED/ADAPTIVE |
-| G2 | SpreadMult_{FX,GOLD,CRYPTO} | 2.0/2.5/3.0 | |
-| G2 | SLATRMult_{FX,GOLD,CRYPTO} | 0.7/0.8/0.7 | |
-| G2 | MinRangeCostMult_{FX,GOLD,CRYPTO} | 2.5/2.5/2.0 | |
-| G2 | TPExtRatio_{FX,GOLD,CRYPTO} | 0.382/0.382/0.382 | RangeCost評価用のみ |
-| G3:戦略 | OptionalBand38 | OFF | |
-| G3 | ConfirmModeOverride | OFF | |
+| G2 | SpreadMult_GOLD | 2.5 | Adaptive倍率 |
+| G2 | InputMaxSlippagePts | 0 | 0→内部デフォルト5.0 |
+| G2 | InputMaxFillDeviationPts | 0 | 0→内部デフォルト8.0 |
+| G2 | InputMaxSpreadPts | 0 | FIXED時の上限（0=無効） |
+| G2:EntryGate | MinRR_EntryGate_GOLD | 0.6 | ※現在は記録用のみ |
+| G2 | MinRangeCostMult_GOLD | 2.5 | |
+| G2 | SLATRMult_GOLD | 0.8 | |
+| G2 | TPExtRatio_GOLD | 0.382 | RangeCost評価用のみ |
+| G3:戦略 | ConfirmModeOverride | false | Confirm条件上書き |
+| G4:検証 | DumpStateOnChange | true | 状態変化ログ |
+| G4 | DumpRejectReason | true | Reject理由ログ |
+| G4 | DumpFibValues | true | Fib値ログ |
+| G4 | DumpMarketProfile | true | Profile出力 |
+| G4 | LogStateTransitions | true | 状態遷移ログ |
+| G4 | LogImpulseEvents | true | Impulseイベントログ |
+| G4 | LogTouchEvents | true | タッチイベントログ |
+| G4 | LogConfirmEvents | true | Confirmイベントログ |
+| G4 | LogEntryExit | true | Entry/Exitログ |
+| G4 | LogRejectReason | true | Reject理由ログ |
+| G4 | LogMAConfluence | true | MA合流ログ |
 
 ### 出力
 
 - **Eventログ（TSV）**: 状態遷移・Reject等を時系列で記録。`GbfEA_{RunId}_{Symbol}.tsv`
 - **ImpulseSummary（TSV）**: 1 Impulse = 1行の統計集計用。ANALYZE時のみ。`GbfEA_SUMMARY_{RunId}_{Symbol}.tsv`
 - **チャート描画**: Fibレベル + 押し帯の矩形表示（EnableFibVisualization で制御）
-- **通知**: IMPULSE_FOUND時のみ。Alert/Push/Mail/Sound（各Input制御）
+- **通知**: IMPULSE_FOUND時（TrendFilter/ImpulseExceedFilter通過後）のみ。Alert/Push/Mail/Sound（各Input制御）
 
 ### 主要語彙（RejectStage）
 
@@ -281,23 +331,32 @@ EMACross_Exit / StructBreak_Fib0 / TimeExit / EntryGate_RangeCost_Fail / SL_Hit
 
 ## 市場別パラメータ一覧
 
-| Param | FX | GOLD | CRYPTO |
-|-------|-----|------|--------|
-| ImpulseATRMult | 1.6 | 1.8 | 2.0 |
-| ImpulseMinBars | 1 | 1 | 1 |
-| RetraceBand | 50 | 50/条件で50-61.8 | 50-61.8 |
-| LeaveDistanceMult | 1.5 | 1.5 | 1.2 |
-| MaxSpreadMode | ADAPTIVE | ADAPTIVE | ADAPTIVE |
-| SpreadMult | 2.0 | 2.5 | 3.0 |
-| MaxSlippagePts | 2 | 5 | 8 |
-| MaxFillDeviationPts | 3 | 8 | 12 |
-| TimeExitBars | 10 | 8 | 6 |
-| SLATRMult | 0.7 | 0.8 | 0.7 |
-| MinRangeCostMult | 2.5 | 2.5 | 2.0 |
-| TPExtRatio | 0.382 | 0.382 | 0.382 |
-| ExitMAFastPeriod | 13 | 13 | 13 |
-| ExitMASlowPeriod | 21 | 21 | 21 |
-| ExitConfirmBars | 1 | 1 | 1 |
+> FX/CRYPTO列は設計値（DOC-CORE由来）。実装済みはGOLDのみ。
+
+| Param | FX（設計） | GOLD（実装済） | CRYPTO（設計） |
+|-------|-----------|---------------|---------------|
+| ImpulseATRMult | 1.6 | **1.8** | 2.0 |
+| SmallBodyRatio | 0.35 | **0.40** | 0.45 |
+| ImpulseMinBars | 1 | **1** | 1 |
+| FreezeCancelWindowBars | 2 | **3** | 1 |
+| RetraceBand | 50 | **50/条件で50-61.8** | 50-61.8 |
+| BandWidthPts算出 | Spread×2.0 | **ATR(M1)×0.05** | ATR(M1)×0.08 |
+| LeaveDistanceMult | 1.5 | **1.5** | 1.2 |
+| LeaveMinBars | 1 | **1** | 1 |
+| RetouchTimeLimitBars | 35 | **30** | 25 |
+| ResetMinBars | 10 | **8** | 6 |
+| ConfirmTimeLimitBars | 6 | **5** | 4 |
+| WickRatioMin | — | **0.55** | — |
+| MaxSlippagePts (default) | 2 | **5.0** | 8 |
+| MaxFillDeviationPts (default) | 3 | **8.0** | 12 |
+| TimeExitBars | 10 | **8** | 6 |
+| SpreadMult (Input) | 2.0 | **2.5** | 3.0 |
+| SLATRMult (Input) | 0.7 | **0.8** | 0.7 |
+| MinRangeCostMult (Input) | 2.5 | **2.5** | 2.0 |
+| TPExtRatio (Input) | 0.382 | **0.382** | 0.382 |
+| VolExpansionRatio | — | **1.5** | — |
+| OverextensionMult | — | **2.5** | — |
+| CooldownDuration | — | **3** | — |
 
 ---
 
@@ -308,8 +367,8 @@ EMACross_Exit / StructBreak_Fib0 / TimeExit / EntryGate_RangeCost_Fail / SL_Hit
 3. 離脱未成立の再侵入を2回目タッチとしてカウントしない
 4. 同一Impulse内で2回以上のエントリーが発生しない
 5. Freeze後にFibレベルが再計算されない
-6. 市場別パラメータがMarketModeに応じて正しく切り替わる
-7. RiskGateFail時にIDLEへ正しく遷移する
+6. MarketProfile のパラメータがGOLD向けに正しくロードされる（将来: MarketMode切替時に市場別値がロードされる）
+7. RiskGateFail時にIDLEへ正しく遷移する（LogLevel=ANALYZE時はSoftGate経由）
 8. 順張りフィルタで逆張りImpulseがRejectされる
 9. EMAクロス決済が確定足ベースで正しく動作する
 10. ログ（Event / ImpulseSummary）が仕様の列順・語彙で出力される
@@ -319,11 +378,9 @@ EMACross_Exit / StructBreak_Fib0 / TimeExit / EntryGate_RangeCost_Fail / SL_Hit
 
 ## 未解決・要確認事項
 
-1. **GOLD-STRATEGY-DESIGN.md の位置づけ**: リポジトリ内に別戦略（ブレイクアウト型）の設計書が存在する。本EA（Impulse→Retrace型）とは完全に別コンセプト。対応方針が未定
-2. **CloseByCrossEA / CloseByFlatRangeEA との関係**: 別EAの決済ロジック仕様がdocs内に存在。本EAのスコープとの関係が未整理
-3. **LogLevel=ANALYZE時のRiskGateFail挙動**: DOC-CORE 9.4.1に「LogLevel≠ANALYZEの場合はIDLEへ遷移」とあるが、ANALYZE時の挙動（FIB_ACTIVEへ遷移を許可しつつログ記録？）の詳細が曖昧
-4. **ADAPTIVE SpreadBasePts の更新タイミング**: 「IMPULSE_FOUND発生時のみ」と規定されているが、長時間Impulseが発生しない場合のスプレッド基準の鮮度が要確認
-5. **CRYPTO MicroBreak の LookbackMicroBars=3**: DOC-COREでは固定と記載。最適値の検証が済んでいるか不明
+1. **CloseByCrossEA / CloseByFlatRangeEA との関係**: 別EAの決済ロジック仕様がdocs内に存在。本EAのスコープとの関係が未整理
+2. **ADAPTIVE SpreadBasePts の更新タイミング**: 「IMPULSE_FOUND発生時のみ」と規定されているが、長時間Impulseが発生しない場合のスプレッド基準の鮮度が要確認
+3. **FX/CRYPTO MarketProfile未実装**: 設計値はDOC-COREに存在するが、実装・検証はこれから
 
 ---
 ---

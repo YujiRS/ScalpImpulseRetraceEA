@@ -138,11 +138,11 @@ void PreviewSLTP(double entryPrice, double &outSL, double &outTP)
 
 //+------------------------------------------------------------------+
 //| ロット計算: RISK_PERCENT モード                                     |
-//| Lot = (Balance × RiskPercent%) / (SL距離points × 1pointあたり価値)  |
+//| Lot = (Equity × RiskPercent%) / (SL距離points × 1pointあたり価値)  |
 //+------------------------------------------------------------------+
 double CalcRiskPercentLot(double entryPrice, double slPrice)
 {
-   double riskAmount = AccountInfoDouble(ACCOUNT_BALANCE) * RiskPercent / 100.0;
+   double riskAmount = AccountInfoDouble(ACCOUNT_EQUITY) * RiskPercent / 100.0;
    double slDistPts  = MathAbs(entryPrice - slPrice) / _Point;
 
    if(slDistPts <= 0)

@@ -117,7 +117,7 @@ void PreviewSLTP(double entryPrice, double &outSL, double &outTP)
 //+------------------------------------------------------------------+
 double CalcRiskPercentLot(double entryPrice, double slPrice)
 {
-   double riskAmount = AccountInfoDouble(ACCOUNT_BALANCE) * RiskPercent / 100.0;
+   double riskAmount = AccountInfoDouble(ACCOUNT_EQUITY) * RiskPercent / 100.0;
    double slDistPts  = MathAbs(entryPrice - slPrice) / _Point;
 
    if(slDistPts <= 0)

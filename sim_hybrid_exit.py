@@ -476,6 +476,7 @@ def sim_hybrid_exit(
     pos: Position, df: pd.DataFrame, profile: MarketProfile,
     ema_fast_arr: np.ndarray, ema_slow_arr: np.ndarray,
     ma_flat_arr: np.ndarray, atr_arr: np.ndarray,
+    disable_struct_break: bool = False,
 ) -> Optional[ExitResult]:
     """
     Hybrid exit: check 21MA direction at entry.
@@ -512,8 +513,8 @@ def sim_hybrid_exit(
         c = close[i]
         position_bars += 1
 
-        # ── P1: StructBreak (always active) ──
-        if pos.impulse_start > 0:
+        # ── P1: StructBreak (can be disabled for testing) ──
+        if pos.impulse_start > 0 and not disable_struct_break:
             if is_long and c < pos.impulse_start:
                 pnl = (c - pos.entry_price) / pt
                 reason = "StructBreak" + ("+FR" if use_flatrange else "+Conv")
@@ -673,7 +674,8 @@ def calc_oracle(pos: Position, df: pd.DataFrame, profile: MarketProfile,
 # ═══════════════════════════════════════════════════════════════════════
 
 def run_simulation(df: pd.DataFrame, profile: MarketProfile,
-                   positions: List[Position]) -> pd.DataFrame:
+                   positions: List[Position],
+                   disable_struct_break: bool = False) -> pd.DataFrame:
     """Run all three exit strategies on each position."""
 
     close = df["close"].values
@@ -702,7 +704,8 @@ def run_simulation(df: pd.DataFrame, profile: MarketProfile,
         res_fr = sim_flatrange_exit(pos, df, profile, ma_flat, atr_arr)
 
         # C: Hybrid
-        res_hyb = sim_hybrid_exit(pos, df, profile, ema_fast, ema_slow, ma_flat, atr_arr)
+        res_hyb = sim_hybrid_exit(pos, df, profile, ema_fast, ema_slow, ma_flat, atr_arr,
+                                  disable_struct_break=disable_struct_break)
 
         row = {
             "entry_idx": pos.entry_idx,
@@ -928,6 +931,8 @@ def main():
                         help="Save per-position results to CSV")
     parser.add_argument("--hybrid-time-exit-bars", type=int, default=30,
                         help="TimeExit bars for Hybrid FlatRange path (default: 30)")
+    parser.add_argument("--no-struct-break", action="store_true",
+                        help="Disable StructBreak (P1) in Hybrid exit for testing")
     args = parser.parse_args()
 
     # Load data
@@ -958,7 +963,8 @@ def main():
 
     # Run simulation
     print(f"\nRunning simulation ({len(positions)} positions × 3 strategies)...")
-    rdf = run_simulation(df, profile, positions)
+    rdf = run_simulation(df, profile, positions,
+                         disable_struct_break=args.no_struct_break)
 
     # Reports
     print_pipeline(rdf, "A) Conventional (EMA13/21 Cross)", "conv")

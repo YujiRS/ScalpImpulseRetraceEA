@@ -45,6 +45,16 @@ input int               ExitMAFastPeriod       = 13;             // Exit EMA Fas
 input int               ExitMASlowPeriod       = 21;             // Exit EMA Slow Period
 input int               ExitConfirmBars        = 1;              // Exit Confirm Bars (1本確認)
 
+// --- Exit: Hybrid (FlatRange) ---
+input bool              HybridExit_Enable      = true;           // Hybrid Exit: 21MA方向一致時FlatRange決済
+input int               HybridExit_TimeExitBars = 30;            // Hybrid Exit: FlatRange時のTimeExit(本)
+input int               FR_FlatMaPeriod        = 21;             // FlatRange: MA Period
+input int               FR_FlatSlopeLookback   = 3;              // FlatRange: Slope Lookback Bars
+input double            FR_FlatSlopeAtrMult    = 0.03;           // FlatRange: Slope ATR Mult
+input int               FR_RangeLookback       = 10;             // FlatRange: Range Lookback Bars
+input double            FR_TrailATRMult        = 1.0;            // FlatRange: Trail ATR Mult
+input int               FR_WaitBarsAfterFlat   = 16;             // FlatRange: FailSafe WaitBars
+
 // === TrendFilter / ReversalGuard ===
 input bool   TrendFilter_Enable          = true;
 input double TrendSlopeMult_FX           = 0.05;   // FX ATR(M15)*mult
@@ -212,6 +222,16 @@ int               g_exitEMASlowHandle  = INVALID_HANDLE;
 bool              g_exitPending        = false;
 int               g_exitPendingBars    = 0;
 
+// Hybrid Exit: FlatRange用
+int               g_frMAHandle         = INVALID_HANDLE;
+ENUM_FR_STATE     g_frState            = FR_INACTIVE;
+double            g_frRangeHigh        = 0.0;
+double            g_frRangeLow         = 0.0;
+double            g_frRangeMid         = 0.0;
+double            g_frTrailPeak        = 0.0;
+double            g_frTrailLine        = 0.0;
+int               g_frWaitBarsCount    = 0;
+
 // ATRハンドル
 int               g_atrHandleM1        = INVALID_HANDLE;
 
@@ -345,6 +365,15 @@ void ResetAllState()
 
    g_exitPending     = false;
    g_exitPendingBars = 0;
+
+   // FlatRange state
+   g_frState         = FR_INACTIVE;
+   g_frRangeHigh     = 0.0;
+   g_frRangeLow      = 0.0;
+   g_frRangeMid      = 0.0;
+   g_frTrailPeak     = 0.0;
+   g_frTrailLine     = 0.0;
+   g_frWaitBarsCount = 0;
 
    g_tradeUUID = "";
 }
@@ -783,8 +812,36 @@ void Process_ENTRY_PLACED()
 
    if(PositionSelectByTicket(g_ticket))
    {
-      ChangeState(STATE_IN_POSITION, "OrderFilled");
       g_positionBars = 0;
+
+      // Hybrid Exit: 21MA方向チェック
+      g_frState = FR_INACTIVE;
+      if(HybridExit_Enable && g_frMAHandle != INVALID_HANDLE)
+      {
+         double maCurr[1], maOld[1];
+         if(CopyBuffer(g_frMAHandle, 0, 1, 1, maCurr) >= 1 &&
+            CopyBuffer(g_frMAHandle, 0, 1 + FR_FlatSlopeLookback, 1, maOld) >= 1)
+         {
+            double slope = maCurr[0] - maOld[0];
+            bool maAligned = false;
+            if(g_impulseDir == DIR_LONG && slope > 0)
+               maAligned = true;
+            else if(g_impulseDir == DIR_SHORT && slope < 0)
+               maAligned = true;
+
+            if(maAligned)
+            {
+               g_frState = FR_WAIT_FLAT;
+               Print("[HybridExit] 21MA aligned → FlatRange exit mode");
+            }
+            else
+            {
+               Print("[HybridExit] 21MA NOT aligned → EMA cross exit mode");
+            }
+         }
+      }
+
+      ChangeState(STATE_IN_POSITION, "OrderFilled");
    }
 }
 
@@ -839,6 +896,17 @@ int OnInit()
    {
       Print("ERROR: Failed to create Exit EMA handles. Fast=", g_exitEMAFastHandle, " Slow=", g_exitEMASlowHandle);
       return INIT_FAILED;
+   }
+
+   // FlatRange MA handle (Hybrid Exit) - FX uses SMA
+   if(HybridExit_Enable)
+   {
+      g_frMAHandle = iMA(Symbol(), PERIOD_M1, FR_FlatMaPeriod, 0, MODE_SMA, PRICE_CLOSE);
+      if(g_frMAHandle == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create FlatRange MA handle");
+         return INIT_FAILED;
+      }
    }
 
    g_smaHandleM5_21 = iMA(Symbol(), PERIOD_M5, 21, 0, MODE_SMA, PRICE_CLOSE);
@@ -907,6 +975,8 @@ void OnDeinit(const int reason)
    { IndicatorRelease(g_exitEMAFastHandle); g_exitEMAFastHandle = INVALID_HANDLE; }
    if(g_exitEMASlowHandle != INVALID_HANDLE)
    { IndicatorRelease(g_exitEMASlowHandle); g_exitEMASlowHandle = INVALID_HANDLE; }
+   if(g_frMAHandle != INVALID_HANDLE)
+   { IndicatorRelease(g_frMAHandle); g_frMAHandle = INVALID_HANDLE; }
 
    for(int i = 0; i < g_maPeriodsCount; i++)
    {

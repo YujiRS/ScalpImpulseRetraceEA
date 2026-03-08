@@ -68,6 +68,15 @@ enum ENUM_CONFIRM_TYPE
    CONFIRM_MICRO_BREAK    = 3  // MicroBreak
 };
 
+// FlatRange Exit State（Hybrid Exit用）
+enum ENUM_FR_STATE
+{
+   FR_INACTIVE     = 0, // FlatRange不使用（EMAクロス Exit）
+   FR_WAIT_FLAT    = 1, // Flat検出待ち
+   FR_RANGE_LOCKED = 2, // レンジ確定・ブレイクアウト待ち
+   FR_TRAILING     = 3  // 有利ブレイクアウト後 ATR トレーリング
+};
+
 // Entry種別
 enum ENUM_ENTRY_TYPE
 {

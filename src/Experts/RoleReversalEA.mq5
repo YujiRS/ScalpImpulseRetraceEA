@@ -15,6 +15,7 @@
 #include "RoleReversalEA/Constants.mqh"
 #include "RoleReversalEA/SRDetector.mqh"
 #include "RoleReversalEA/ConfirmEngine.mqh"
+#include "RoleReversalEA/Logger.mqh"
 
 //+------------------------------------------------------------------+
 //| Inputs                                                            |
@@ -316,6 +317,9 @@ int OnInit()
    // Try to restore state from TF change (before DrawSRLevels so broken/used status is applied)
    bool stateRestored = LoadStateFromTFChange();
 
+   // ファイルログ初期化
+   RR_LoggerInit();
+
    Print("RoleReversalEA v1.0 initialized. S/R levels: ", g_srCount, " Magic: ", g_magic);
    for(int i = 0; i < g_srCount; i++)
    {
@@ -367,6 +371,7 @@ void OnDeinit(const int reason)
    if(reason == REASON_CHARTCHANGE)
       SaveStateForTFChange();
 
+   RR_LoggerDeinit();
    ClearChartStatusPanel();
 
    if(g_emaM5Handle != INVALID_HANDLE) IndicatorRelease(g_emaM5Handle);
@@ -391,6 +396,9 @@ void OnTick()
       return;  // Same bar
    g_lastM5Bar = m5Times[0];
    g_m5BarCount++;
+
+   // 日付変更時のログファイルローテーション
+   RR_LoggerCheckRotate();
 
    // Refresh S/R periodically
    datetime h1Times[];
@@ -600,6 +608,8 @@ void ScanForBreakout()
          if(LogLevel >= RR_LOG_DEBUG)
             Print("BREAKOUT UP detected @ ", DoubleToString(levelPrice, _Digits),
                   " bar=", g_m5BarCount);
+         RR_WriteLog(RR_LOG_BREAKOUT, RR_DIR_LONG, levelPrice, currClose,
+                     0, 0, "", "DETECTED bar=" + IntegerToString(g_m5BarCount));
          return;
       }
 
@@ -636,6 +646,8 @@ void ScanForBreakout()
          if(LogLevel >= RR_LOG_DEBUG)
             Print("BREAKOUT DOWN detected @ ", DoubleToString(levelPrice, _Digits),
                   " bar=", g_m5BarCount);
+         RR_WriteLog(RR_LOG_BREAKOUT, RR_DIR_SHORT, levelPrice, currClose,
+                     0, 0, "", "DETECTED bar=" + IntegerToString(g_m5BarCount));
          return;
       }
    }
@@ -688,6 +700,8 @@ void ConfirmBreakout()
       g_state = RR_WAITING_PULLBACK;
       if(LogLevel >= RR_LOG_DEBUG)
          Print("BREAKOUT CONFIRMED. Waiting for pullback...");
+      RR_WriteLog(RR_LOG_BREAKOUT, g_breakoutDir, levelPrice, 0, 0, 0, "",
+                  "CONFIRMED count=" + IntegerToString(g_confirmCount));
    }
 }
 
@@ -791,6 +805,7 @@ void WaitForPullbackAndConfirm()
       {
          if(LogLevel >= RR_LOG_ANALYZE)
             Print("REJECT: EMA trend against direction");
+         RR_WriteLog(RR_LOG_REJECT, tradeDir, levelPrice, 0, 0, 0, "", "EMA_TREND_AGAINST");
          return;
       }
    }
@@ -803,6 +818,7 @@ void WaitForPullbackAndConfirm()
       {
          if(LogLevel >= RR_LOG_ANALYZE)
             Print("REJECT: EMA not supporting long");
+         RR_WriteLog(RR_LOG_REJECT, tradeDir, levelPrice, 0, 0, 0, "", "EMA_NOT_SUPPORT_LONG");
          return;
       }
    }
@@ -812,6 +828,7 @@ void WaitForPullbackAndConfirm()
       {
          if(LogLevel >= RR_LOG_ANALYZE)
             Print("REJECT: EMA not supporting short");
+         RR_WriteLog(RR_LOG_REJECT, tradeDir, levelPrice, 0, 0, 0, "", "EMA_NOT_SUPPORT_SHORT");
          return;
       }
    }
@@ -829,6 +846,7 @@ void WaitForPullbackAndConfirm()
    {
       if(LogLevel >= RR_LOG_ANALYZE)
          Print("REJECT: No confirm pattern");
+      RR_WriteLog(RR_LOG_REJECT, tradeDir, levelPrice, m5Close[1], 0, 0, "", "NO_CONFIRM_PATTERN");
       return;
    }
 
@@ -855,6 +873,8 @@ void WaitForPullbackAndConfirm()
       if(LogLevel >= RR_LOG_DEBUG)
          Print("REJECT: SL too wide. slDist=", DoubleToString(slDist, _Digits),
                " limit=", DoubleToString(atrVal * MaxSL_ATR, _Digits));
+      RR_WriteLog(RR_LOG_REJECT, tradeDir, levelPrice, entry, sl, 0, "",
+                  "SL_TOO_WIDE dist=" + DoubleToString(slDist, _Digits));
       return;
    }
 
@@ -898,6 +918,8 @@ void WaitForPullbackAndConfirm()
          DeletePullbackZone(g_breakoutLevelIdx);
          DrawSRLevels();
 
+         RR_WriteLog(RR_LOG_ENTRY, tradeDir, levelPrice, entry, sl, tp,
+                     ConfirmPatternName(confirm), "");
          string confirmName = ConfirmPatternName(confirm);
          string msg = StringFormat("RoleReversal ENTRY: %s @ %s SL=%s TP=%s Pattern=%s Level=%s",
                                     (tradeDir == RR_DIR_LONG ? "LONG" : "SHORT"),
@@ -1030,6 +1052,7 @@ void ManagePosition()
    if(!CheckExistingPosition())
    {
       Print("Position closed externally or by SL/TP");
+      RR_WriteLog(RR_LOG_EXIT, 0, 0, 0, 0, 0, "", "CLOSED_EXTERNALLY_OR_SLTP");
       g_state = RR_COOLDOWN;
       g_posTicket = 0;
       ResetState();

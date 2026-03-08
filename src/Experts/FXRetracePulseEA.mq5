@@ -29,7 +29,7 @@ input ENUM_LOT_MODE     LotMode                = LOT_MODE_FIXED; // LotMode
 input double            FixedLot               = 0.01;           // FixedLot
 input double            RiskPercent            = 1.0;            // RiskPercent (有効証拠金の%)
 input ENUM_LOG_LEVEL    LogLevel               = LOG_LEVEL_NORMAL; // LogLevel
-input int               RunId                  = 1;              // RunId
+input int               RunId                  = 0;              // RunId (0=自動連番)
 input double            LongDisableAbove       = 0;              // LongDisableAbove(Bid≧この値でLong禁止, 0=制御なし)
 input double            ShortDisableBelow      = 0;              // ShortDisableBelow(Bid≦この値でShort禁止, 0=制御なし)
 

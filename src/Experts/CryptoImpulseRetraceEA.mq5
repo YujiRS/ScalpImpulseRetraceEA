@@ -45,6 +45,10 @@ input bool              EnableMailNotification   = false;
 input bool              EnableSoundNotification  = false;
 input string            SoundFileName            = "alert.wav";
 
+// --- Exit: 建値移動 ---
+input bool              EnableBreakeven        = false;           // 建値移動 ON/OFF
+input double            BreakevenRR            = 1.0;             // 建値移動トリガー R:R
+
 // --- Exit: EMAクロス決済 ---
 input int               ExitMAFastPeriod       = 13;             // Exit EMA Fast Period
 input int               ExitMASlowPeriod       = 21;             // Exit EMA Slow Period

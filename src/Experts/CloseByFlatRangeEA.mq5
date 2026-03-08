@@ -887,6 +887,17 @@ int OnInit()
    // Apply market mode preset
    ApplyPreset();
 
+   // Set filling mode for CTrade (auto-detect broker requirement)
+   {
+      long fillMode = SymbolInfoInteger(Symbol(), SYMBOL_FILLING_MODE);
+      if((fillMode & SYMBOL_FILLING_FOK) != 0)
+         g_trade.SetTypeFilling(ORDER_FILLING_FOK);
+      else if((fillMode & SYMBOL_FILLING_IOC) != 0)
+         g_trade.SetTypeFilling(ORDER_FILLING_IOC);
+      else
+         g_trade.SetTypeFilling(ORDER_FILLING_RETURN);
+   }
+
    // Create indicator handles
    ENUM_MA_METHOD maMethod = (w_flatMaMethod == FLAT_MA_SMA) ? MODE_SMA : MODE_EMA;
    g_hMA  = iMA(_Symbol, SignalTF, w_flatMaPeriod, 0, maMethod, PRICE_CLOSE);

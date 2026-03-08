@@ -219,12 +219,11 @@ double GetExitEMA(int handle, int shift)
    return buf[0];
 }
 
-// ポジション管理：CHANGE-008 EMAクロス決済（確定足＋1本確認）
+// ポジション管理：Hybrid Exit（FlatRange / EMAクロス条件分岐）
 void ManagePosition()
 {
    if(!PositionSelectByTicket(g_ticket))
    {
-      // ポジションなし → 決済済み
       g_stats.FinalState = "PositionClosed";
       ChangeState(STATE_COOLDOWN, "PositionClosed");
       return;
@@ -233,12 +232,13 @@ void ManagePosition()
    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double currentSL = PositionGetDouble(POSITION_SL);
    int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   bool useFR = (g_frState != FR_INACTIVE);
 
    // =====================================================================
    // Exit優先順位1: 構造破綻（Fib0 = ImpulseStart 終値割れ/超え：確定足）
    // =====================================================================
    {
-      double close1 = iClose(Symbol(), PERIOD_M1, 1);  // 直近確定足
+      double close1 = iClose(Symbol(), PERIOD_M1, 1);
       bool structBreak = false;
 
       if(g_impulseDir == DIR_LONG && close1 < g_impulseStart)
@@ -251,31 +251,35 @@ void ManagePosition()
          g_stats.FinalState = "StructBreak_Fib0";
          ClosePosition("StructBreak_Fib0",
                   "ExitReason=STRUCT_BREAK;Fib0=" + DoubleToString(g_impulseStart, digits) +
-                  ";Close1=" + DoubleToString(close1, digits));
+                  ";Close1=" + DoubleToString(close1, digits) +
+                  ";ExitMode=" + (useFR ? "FR" : "Conv"));
          ChangeState(STATE_COOLDOWN, "StructBreak_Fib0");
          return;
       }
    }
 
    // =====================================================================
-   // Exit優先順位2: 時間撤退（Entry後N本以内に伸びない）
+   // Exit優先順位2: 時間撤退（FlatRangeモード時は延長値を使用）
    // =====================================================================
    g_positionBars++;
-   if(g_positionBars >= g_profile.timeExitBars)
+   int timeExitLimit = useFR ? HybridExit_TimeExitBars : g_profile.timeExitBars;
+   if(g_positionBars >= timeExitLimit)
    {
       double posProfit = PositionGetDouble(POSITION_PROFIT);
       if(posProfit <= 0)
       {
          g_stats.FinalState = "TimeExit";
          ClosePosition("TimeExit",
-                  "ExitReason=TIMEOUT;Bars=" + IntegerToString(g_positionBars));
+                  "ExitReason=TIMEOUT;Bars=" + IntegerToString(g_positionBars) +
+                  ";Limit=" + IntegerToString(timeExitLimit) +
+                  ";ExitMode=" + (useFR ? "FR" : "Conv"));
          ChangeState(STATE_COOLDOWN, "TimeExit");
          return;
       }
    }
 
    // =====================================================================
-   // 建値移動: RR >= 1.0で建値（維持）
+   // 建値移動: RR >= 1.0で建値（維持）— 両モード共通
    // =====================================================================
    {
       double risk = MathAbs(openPrice - g_sl);
@@ -302,90 +306,247 @@ void ManagePosition()
    }
 
    // =====================================================================
-   // Exit優先順位3: EMAクロス（確定足＋1本確認）
+   // Exit優先順位3: モード分岐
    // =====================================================================
-   {
-      // EMA値取得（確定足: shift=1, 1本前: shift=2）
-      double emaFast1 = GetExitEMA(g_exitEMAFastHandle, 1);  // 直近確定足
-      double emaSlow1 = GetExitEMA(g_exitEMASlowHandle, 1);
-      double emaFast2 = GetExitEMA(g_exitEMAFastHandle, 2);  // 1つ前の確定足
-      double emaSlow2 = GetExitEMA(g_exitEMASlowHandle, 2);
+   if(useFR)
+      ManagePosition_FlatRange(digits);
+   else
+      ManagePosition_EMACross(digits);
+}
 
-      if(emaFast1 == 0.0 || emaSlow1 == 0.0 || emaFast2 == 0.0 || emaSlow2 == 0.0)
+//+------------------------------------------------------------------+
+//| FlatRange Exit（Hybrid Exit: 21MA方向一致時）                       |
+//+------------------------------------------------------------------+
+void ManagePosition_FlatRange(int digits)
+{
+   double close1 = iClose(Symbol(), PERIOD_M1, 1);
+   double atr1   = GetATR_M1(1);
+
+   if(atr1 <= 0) return;
+
+   // ── FR_WAIT_FLAT: フラット検出 ──
+   if(g_frState == FR_WAIT_FLAT)
+   {
+      double maCurr[1], maOld[1];
+      if(CopyBuffer(g_frMAHandle, 0, 1, 1, maCurr) < 1) return;
+      if(CopyBuffer(g_frMAHandle, 0, 1 + FR_FlatSlopeLookback, 1, maOld) < 1) return;
+
+      double slopePts = MathAbs(maCurr[0] - maOld[0]) / _Point;
+      double atrPts   = atr1 / _Point;
+
+      if(slopePts <= atrPts * FR_FlatSlopeAtrMult)
       {
-         // EMA取得失敗時はスキップ
+         // Flat検出 → レンジ確定
+         double highs[], lows[];
+         ArraySetAsSeries(highs, true);
+         ArraySetAsSeries(lows, true);
+         if(CopyHigh(Symbol(), PERIOD_M1, 1, FR_RangeLookback, highs) < FR_RangeLookback) return;
+         if(CopyLow(Symbol(), PERIOD_M1, 1, FR_RangeLookback, lows) < FR_RangeLookback) return;
+
+         g_frRangeHigh = highs[ArrayMaximum(highs)];
+         g_frRangeLow  = lows[ArrayMinimum(lows)];
+         g_frRangeMid  = (g_frRangeHigh + g_frRangeLow) / 2.0;
+         g_frWaitBarsCount = 0;
+         g_frState = FR_RANGE_LOCKED;
+
+         Print("[FlatRange] Flat detected. Range=",
+               DoubleToString(g_frRangeHigh, digits), "/",
+               DoubleToString(g_frRangeLow, digits),
+               " SlopePts=", DoubleToString(slopePts, 1),
+               " ATRPts=", DoubleToString(atrPts, 1));
+      }
+      return;
+   }
+
+   // ── FR_RANGE_LOCKED: ブレイクアウト判定 ──
+   if(g_frState == FR_RANGE_LOCKED)
+   {
+      g_frWaitBarsCount++;
+
+      int breakout = 0;
+      if(g_impulseDir == DIR_LONG)
+      {
+         if(close1 < g_frRangeLow)  breakout = -1;  // 不利ブレイク
+         else if(close1 > g_frRangeHigh) breakout = +1;  // 有利ブレイク
+      }
+      else
+      {
+         if(close1 > g_frRangeHigh) breakout = -1;
+         else if(close1 < g_frRangeLow) breakout = +1;
+      }
+
+      if(breakout < 0)
+      {
+         g_stats.FinalState = "FR_UnfavBreak";
+         ClosePosition("FR_UnfavBreak",
+                  "ExitReason=UNFAV_BREAK;Range=" +
+                  DoubleToString(g_frRangeHigh, digits) + "/" +
+                  DoubleToString(g_frRangeLow, digits) +
+                  ";Close1=" + DoubleToString(close1, digits));
+         ChangeState(STATE_COOLDOWN, "FR_UnfavBreak");
          return;
       }
 
-      if(g_exitPending)
+      if(breakout > 0)
       {
-         // --- 確認フェーズ: クロス状態が維持されているか ---
-         g_exitPendingBars++;
-
-         bool crossMaintained = false;
-         string crossDir = "";
-
+         // 有利ブレイク → トレーリング開始
          if(g_impulseDir == DIR_LONG)
          {
-            // Long保有中: デッドクロス維持 = EMA_Fast < EMA_Slow
-            if(emaFast1 < emaSlow1)
+            g_frTrailPeak = iHigh(Symbol(), PERIOD_M1, 1);
+            // 過去バーの最高値も考慮
+            for(int k = 2; k <= g_positionBars && k <= 500; k++)
             {
-               crossMaintained = true;
-               crossDir = "DEAD";
+               double h = iHigh(Symbol(), PERIOD_M1, k);
+               if(h > g_frTrailPeak) g_frTrailPeak = h;
             }
+            g_frTrailLine = g_frTrailPeak - atr1 * FR_TrailATRMult;
          }
          else
          {
-            // Short保有中: ゴールデンクロス維持 = EMA_Fast > EMA_Slow
-            if(emaFast1 > emaSlow1)
+            g_frTrailPeak = iLow(Symbol(), PERIOD_M1, 1);
+            for(int k = 2; k <= g_positionBars && k <= 500; k++)
             {
-               crossMaintained = true;
-               crossDir = "GOLDEN";
+               double l = iLow(Symbol(), PERIOD_M1, k);
+               if(l < g_frTrailPeak) g_frTrailPeak = l;
             }
+            g_frTrailLine = g_frTrailPeak + atr1 * FR_TrailATRMult;
          }
+         g_frState = FR_TRAILING;
 
-         if(crossMaintained && g_exitPendingBars >= ExitConfirmBars)
+         Print("[FlatRange] Favorable breakout → trailing. Peak=",
+               DoubleToString(g_frTrailPeak, digits),
+               " Line=", DoubleToString(g_frTrailLine, digits));
+         return;
+      }
+
+      // FailSafe: WaitBars超過
+      if(g_frWaitBarsCount > FR_WaitBarsAfterFlat)
+      {
+         g_stats.FinalState = "FR_FailSafe";
+         ClosePosition("FR_FailSafe",
+                  "ExitReason=FAILSAFE;WaitBars=" + IntegerToString(g_frWaitBarsCount) +
+                  ";Range=" + DoubleToString(g_frRangeHigh, digits) + "/" +
+                  DoubleToString(g_frRangeLow, digits));
+         ChangeState(STATE_COOLDOWN, "FR_FailSafe");
+         return;
+      }
+      return;
+   }
+
+   // ── FR_TRAILING: ATRトレーリング ──
+   if(g_frState == FR_TRAILING)
+   {
+      if(g_impulseDir == DIR_LONG)
+      {
+         double h1 = iHigh(Symbol(), PERIOD_M1, 1);
+         if(h1 > g_frTrailPeak) g_frTrailPeak = h1;
+         g_frTrailLine = g_frTrailPeak - atr1 * FR_TrailATRMult;
+
+         if(close1 < g_frTrailLine)
          {
-            // クロス確認完了 → 成行決済
-            g_stats.FinalState = "EMACross_Exit";
-            ClosePosition("EMACross",
-                     "ExitReason=EMA_CROSS;CrossDir=" + crossDir +
-                     ";EMA" + IntegerToString(ExitMAFastPeriod) + "=" + DoubleToString(emaFast1, digits) +
-                     ";EMA" + IntegerToString(ExitMASlowPeriod) + "=" + DoubleToString(emaSlow1, digits) +
-                     ";ConfirmBars=" + IntegerToString(g_exitPendingBars));
-            ChangeState(STATE_COOLDOWN, "EMACross_Exit");
+            g_stats.FinalState = "FR_TrailStop";
+            ClosePosition("FR_TrailStop",
+                     "ExitReason=TRAIL_STOP;Peak=" + DoubleToString(g_frTrailPeak, digits) +
+                     ";Line=" + DoubleToString(g_frTrailLine, digits) +
+                     ";Close1=" + DoubleToString(close1, digits));
+            ChangeState(STATE_COOLDOWN, "FR_TrailStop");
             return;
-         }
-         else if(!crossMaintained)
-         {
-            // クロス未維持 → ExitPending解除
-            g_exitPending     = false;
-            g_exitPendingBars = 0;
          }
       }
       else
       {
-         // --- 検出フェーズ: 新たなクロス発生をチェック ---
-         bool crossDetected = false;
+         double l1 = iLow(Symbol(), PERIOD_M1, 1);
+         if(l1 < g_frTrailPeak) g_frTrailPeak = l1;
+         g_frTrailLine = g_frTrailPeak + atr1 * FR_TrailATRMult;
 
-         if(g_impulseDir == DIR_LONG)
+         if(close1 > g_frTrailLine)
          {
-            // Long保有中: デッドクロス = EMA_Fast がEMA_Slow を下抜け
-            if(emaFast2 >= emaSlow2 && emaFast1 < emaSlow1)
-               crossDetected = true;
+            g_stats.FinalState = "FR_TrailStop";
+            ClosePosition("FR_TrailStop",
+                     "ExitReason=TRAIL_STOP;Peak=" + DoubleToString(g_frTrailPeak, digits) +
+                     ";Line=" + DoubleToString(g_frTrailLine, digits) +
+                     ";Close1=" + DoubleToString(close1, digits));
+            ChangeState(STATE_COOLDOWN, "FR_TrailStop");
+            return;
          }
-         else
-         {
-            // Short保有中: ゴールデンクロス = EMA_Fast がEMA_Slow を上抜け
-            if(emaFast2 <= emaSlow2 && emaFast1 > emaSlow1)
-               crossDetected = true;
-         }
+      }
+   }
+}
 
-         if(crossDetected)
+//+------------------------------------------------------------------+
+//| EMA Cross Exit（従来方式：21MA不一致時 or HybridExit無効時）         |
+//+------------------------------------------------------------------+
+void ManagePosition_EMACross(int digits)
+{
+   // EMA値取得（確定足: shift=1, 1本前: shift=2）
+   double emaFast1 = GetExitEMA(g_exitEMAFastHandle, 1);
+   double emaSlow1 = GetExitEMA(g_exitEMASlowHandle, 1);
+   double emaFast2 = GetExitEMA(g_exitEMAFastHandle, 2);
+   double emaSlow2 = GetExitEMA(g_exitEMASlowHandle, 2);
+
+   if(emaFast1 == 0.0 || emaSlow1 == 0.0 || emaFast2 == 0.0 || emaSlow2 == 0.0)
+      return;
+
+   if(g_exitPending)
+   {
+      g_exitPendingBars++;
+
+      bool crossMaintained = false;
+      string crossDir = "";
+
+      if(g_impulseDir == DIR_LONG)
+      {
+         if(emaFast1 < emaSlow1)
          {
-            g_exitPending     = true;
-            g_exitPendingBars = 0;
+            crossMaintained = true;
+            crossDir = "DEAD";
          }
+      }
+      else
+      {
+         if(emaFast1 > emaSlow1)
+         {
+            crossMaintained = true;
+            crossDir = "GOLDEN";
+         }
+      }
+
+      if(crossMaintained && g_exitPendingBars >= ExitConfirmBars)
+      {
+         g_stats.FinalState = "EMACross_Exit";
+         ClosePosition("EMACross",
+                  "ExitReason=EMA_CROSS;CrossDir=" + crossDir +
+                  ";EMA" + IntegerToString(ExitMAFastPeriod) + "=" + DoubleToString(emaFast1, digits) +
+                  ";EMA" + IntegerToString(ExitMASlowPeriod) + "=" + DoubleToString(emaSlow1, digits) +
+                  ";ConfirmBars=" + IntegerToString(g_exitPendingBars));
+         ChangeState(STATE_COOLDOWN, "EMACross_Exit");
+         return;
+      }
+      else if(!crossMaintained)
+      {
+         g_exitPending     = false;
+         g_exitPendingBars = 0;
+      }
+   }
+   else
+   {
+      bool crossDetected = false;
+
+      if(g_impulseDir == DIR_LONG)
+      {
+         if(emaFast2 >= emaSlow2 && emaFast1 < emaSlow1)
+            crossDetected = true;
+      }
+      else
+      {
+         if(emaFast2 <= emaSlow2 && emaFast1 > emaSlow1)
+            crossDetected = true;
+      }
+
+      if(crossDetected)
+      {
+         g_exitPending     = true;
+         g_exitPendingBars = 0;
       }
    }
 }

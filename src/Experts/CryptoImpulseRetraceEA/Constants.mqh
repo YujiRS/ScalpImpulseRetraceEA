@@ -10,21 +10,21 @@
 //| 定数定義                                                          |
 //+------------------------------------------------------------------+
 #define EA_NAME           "CirEA"
-#define EA_VERSION        "v1.0"
+#define EA_VERSION        "v1.1"
 
 //+------------------------------------------------------------------+
 //| Enum定義                                                          |
 //+------------------------------------------------------------------+
 
-// StateID定義（固定・変更禁止）
+// StateID定義（数値固定・変更禁止）
 enum ENUM_EA_STATE
 {
    STATE_IDLE                    = 0, // IDLE
    STATE_IMPULSE_FOUND           = 1, // IMPULSE_FOUND
    STATE_IMPULSE_CONFIRMED       = 2, // IMPULSE_CONFIRMED
-   STATE_FIB_ACTIVE              = 3, // FIB_ACTIVE
-   STATE_TOUCH_1                 = 4, // TOUCH_1
-   STATE_TOUCH_2_WAIT_CONFIRM    = 5, // TOUCH_2_WAIT_CONFIRM
+   STATE_MA_PULLBACK_WAIT        = 3, // MA_PULLBACK_WAIT (旧FIB_ACTIVE)
+   STATE_RESERVED_4              = 4, // (reserved)
+   STATE_RESERVED_5              = 5, // (reserved)
    STATE_ENTRY_PLACED            = 6, // ENTRY_PLACED
    STATE_IN_POSITION             = 7, // IN_POSITION
    STATE_COOLDOWN                = 8  // COOLDOWN
@@ -61,11 +61,12 @@ enum ENUM_DIRECTION
    DIR_SHORT = 2  // SHORT
 };
 
-// Confirm種別（CRYPTO: MicroBreakのみ）
+// Confirm種別（CRYPTO: CloseBounce / WickRejection）
 enum ENUM_CONFIRM_TYPE
 {
    CONFIRM_NONE           = 0, // NONE
-   CONFIRM_MICRO_BREAK    = 3  // MicroBreak
+   CONFIRM_WICK_REJECTION = 1, // WickRejection (MA bounce)
+   CONFIRM_CLOSE_BOUNCE   = 4  // CloseBounce (MA bounce)
 };
 
 // Entry種別
@@ -249,9 +250,9 @@ string StateToString(ENUM_EA_STATE state)
       case STATE_IDLE:                   return "IDLE";
       case STATE_IMPULSE_FOUND:          return "IMPULSE_FOUND";
       case STATE_IMPULSE_CONFIRMED:      return "IMPULSE_CONFIRMED";
-      case STATE_FIB_ACTIVE:             return "FIB_ACTIVE";
-      case STATE_TOUCH_1:                return "TOUCH_1";
-      case STATE_TOUCH_2_WAIT_CONFIRM:   return "TOUCH_2_WAIT_CONFIRM";
+      case STATE_MA_PULLBACK_WAIT:       return "MA_PULLBACK_WAIT";
+      case STATE_RESERVED_4:             return "RESERVED_4";
+      case STATE_RESERVED_5:             return "RESERVED_5";
       case STATE_ENTRY_PLACED:           return "ENTRY_PLACED";
       case STATE_IN_POSITION:            return "IN_POSITION";
       case STATE_COOLDOWN:               return "COOLDOWN";
@@ -273,7 +274,8 @@ string ConfirmTypeToString(ENUM_CONFIRM_TYPE ct)
 {
    switch(ct)
    {
-      case CONFIRM_MICRO_BREAK:    return "MicroBreak";
+      case CONFIRM_WICK_REJECTION: return "WickRejection";
+      case CONFIRM_CLOSE_BOUNCE:   return "CloseBounce";
       default:                     return "NONE";
    }
 }

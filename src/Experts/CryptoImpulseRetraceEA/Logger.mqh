@@ -217,10 +217,11 @@ void WriteLog(ENUM_LOG_EVENT event,
 
    double currentSpread = SymbolInfoInteger(Symbol(), SYMBOL_SPREAD) * Point();
 
-   double bandLower = g_primaryBandLower;
-   double bandUpper = g_primaryBandUpper;
+   // MA Bounceバンド情報
+   double bandLower = g_maBounceMAValue - g_maBounceBandWidth;
+   double bandUpper = g_maBounceMAValue + g_maBounceBandWidth;
 
-   int totalTouches = g_touchCount_Primary;
+   int totalTouches = g_stats.ConfirmCount;
 
    double atrVal = GetATR_M1(0);
 

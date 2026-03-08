@@ -28,6 +28,8 @@ input double            FixedLot               = 0.01;          // Fixed Lot
 input double            RiskPercent            = 1.0;            // Risk % (of equity)
 input ENUM_RR_LOG_LEVEL LogLevel               = RR_LOG_NORMAL; // Log Level
 input int               MagicOffset            = 0;              // Magic Number Offset
+input double            LongDisableAbove       = 0;              // LongDisableAbove(Bid≧この値でLong禁止, 0=制御なし)
+input double            ShortDisableBelow      = 0;              // ShortDisableBelow(Bid≦この値でShort禁止, 0=制御なし)
 
 // === G10: Notification ===
 input bool              EnableAlert            = true;           // Alert on entry
@@ -903,6 +905,29 @@ void WaitForPullbackAndConfirm()
               entry + slDist * MinRR :
               entry - slDist * MinRR;
       }
+   }
+
+   // 方向レートフィルター
+   double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   if(tradeDir == RR_DIR_LONG && LongDisableAbove > 0 && bid >= LongDisableAbove)
+   {
+      if(LogLevel >= RR_LOG_ANALYZE)
+         Print("REJECT: LongDisabledAbove Bid=", DoubleToString(bid, _Digits),
+               " >= ", DoubleToString(LongDisableAbove, _Digits));
+      RR_WriteLog(RR_LOG_REJECT, tradeDir, levelPrice, bid, 0, 0, "",
+                  "LongDisabledAbove Bid=" + DoubleToString(bid, _Digits)
+                  + " >= " + DoubleToString(LongDisableAbove, _Digits));
+      return;
+   }
+   if(tradeDir == RR_DIR_SHORT && ShortDisableBelow > 0 && bid <= ShortDisableBelow)
+   {
+      if(LogLevel >= RR_LOG_ANALYZE)
+         Print("REJECT: ShortDisabledBelow Bid=", DoubleToString(bid, _Digits),
+               " <= ", DoubleToString(ShortDisableBelow, _Digits));
+      RR_WriteLog(RR_LOG_REJECT, tradeDir, levelPrice, bid, 0, 0, "",
+                  "ShortDisabledBelow Bid=" + DoubleToString(bid, _Digits)
+                  + " <= " + DoubleToString(ShortDisableBelow, _Digits));
+      return;
    }
 
    // === ALL CONDITIONS MET → EXECUTE ===

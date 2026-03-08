@@ -1,61 +1,11 @@
 //+------------------------------------------------------------------+
 //| EntryEngine.mqh                                                   |
-//| CRYPTO専用: MicroBreak Confirm・TrendFilter(EMA21×EMA50)           |
+//| CRYPTO専用: TrendFilter(EMA21×EMA50)                               |
 //| ReversalGuard(軽量)・FlatFilter(M5 range-based)                    |
+//| v1.1: Confirm判定はMABounceEngine.mqhに移行                        |
 //+------------------------------------------------------------------+
 #ifndef __ENTRY_ENGINE_MQH__
 #define __ENTRY_ENGINE_MQH__
-
-//+------------------------------------------------------------------+
-//| MicroBreak（CRYPTO: 3-bar lookback、フラクタルではなく直近3本max/min） |
-//+------------------------------------------------------------------+
-void UpdateLookbackMicroLevels()
-{
-   // CRYPTO MicroBreak: LookbackMicroBars=3
-   // MicroHigh = max(High[2..4]), MicroLow = min(Low[2..4])
-   g_microHigh = -DBL_MAX;
-   g_microLow  = DBL_MAX;
-
-   for(int i = 2; i <= 4; i++)
-   {
-      double h = iHigh(Symbol(), PERIOD_M1, i);
-      double l = iLow(Symbol(), PERIOD_M1, i);
-      if(h > g_microHigh) g_microHigh = h;
-      if(l < g_microLow)  g_microLow = l;
-   }
-
-   g_microHighValid = (g_microHigh > -DBL_MAX);
-   g_microLowValid  = (g_microLow < DBL_MAX);
-}
-
-bool CheckMicroBreak()
-{
-   double close1 = iClose(Symbol(), PERIOD_M1, 1);
-
-   UpdateLookbackMicroLevels();
-
-   if(g_impulseDir == DIR_LONG)
-   {
-      if(g_microHighValid && close1 > g_microHigh)
-         return true;
-   }
-   else
-   {
-      if(g_microLowValid && close1 < g_microLow)
-         return true;
-   }
-
-   return false;
-}
-
-// CRYPTO Confirm判定: MicroBreak ONLY
-ENUM_CONFIRM_TYPE EvaluateConfirm()
-{
-   if(CheckMicroBreak())
-      return CONFIRM_MICRO_BREAK;
-
-   return CONFIRM_NONE;
-}
 
 //+------------------------------------------------------------------+
 //| TrendFilter: CRYPTO = EMA21 vs EMA50 + EMA50 slope               |

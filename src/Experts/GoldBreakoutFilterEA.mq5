@@ -1,17 +1,18 @@
 //+------------------------------------------------------------------+
 //| GoldBreakoutFilterEA.mq5                                         |
-//| GoldBreakoutFilterEA v2.0                                        |
-//| GOLD専用: Impulse検出＋EMA/Exceedフィルター                        |
+//| GoldBreakoutFilterEA v2.1                                        |
+//| GOLD専用: Impulse検出＋MA Bounce Entry＋EMA/Exceedフィルター        |
+//| v2.1: Fib 2-Touch → MA Bounce (EMA13@M15) に変更                 |
 //+------------------------------------------------------------------+
 #property copyright "GoldBreakoutFilterEA"
 #property link      ""
-#property version   "2.00"
+#property version   "2.10"
 #property strict
 
 //+------------------------------------------------------------------+
 //| Module Includes                                                    |
 //| 順序重要: Constants → Logger → MarketProfile → ImpulseDetector     |
-//|          → FibEngine → EntryEngine → RiskManager → Execution      |
+//|          → MABounceEngine → EntryEngine → RiskManager → Execution |
 //|          → Notification → Visualization                            |
 //+------------------------------------------------------------------+
 #include "GoldBreakoutFilterEA/Constants.mqh"
@@ -43,6 +44,11 @@ input string            SoundFileName            = "alert.wav";   // terminal/So
 input int               ExitMAFastPeriod       = 13;             // Exit EMA Fast Period
 input int               ExitMASlowPeriod       = 21;             // Exit EMA Slow Period
 input int               ExitConfirmBars        = 1;              // Exit Confirm Bars (1本確認)
+
+// === MA Bounce Entry ===
+input ENUM_TIMEFRAMES   MABounce_Timeframe     = PERIOD_M15;     // MA Bounce HTF (GOLD: M15推奨)
+input int               MABounce_Period         = 13;             // MA Bounce EMA Period
+input double            MABounce_BandMult       = 0.3;            // MA Bounce Band Width = ATR(HTF) × this
 
 // === TrendFilter / ReversalGuard ===
 input bool   TrendFilter_Enable          = true;
@@ -125,53 +131,25 @@ int               g_freezeBarIndex     = -1;
 datetime          g_freezeBarTime      = 0;
 int               g_freezeCancelCount  = 0;
 
-// Fib
+// Fib (Structure Break用に維持)
 double            g_fib382             = 0.0;
 double            g_fib500             = 0.0;
 double            g_fib618             = 0.0;
 double            g_fib786             = 0.0;
 
-// BandWidth
+// BandWidth (MA Bounce用)
 double            g_bandWidthPts       = 0.0;
 double            g_effectiveBandWidthPts = 0.0;
 
-// Band上下限
-double            g_primaryBandUpper   = 0.0;
-double            g_primaryBandLower   = 0.0;
-double            g_deepBandUpper      = 0.0;
-double            g_deepBandLower      = 0.0;
-double            g_optBand38Upper     = 0.0;
-double            g_optBand38Lower     = 0.0;
-
-// Touch
-int               g_touchCount_Primary   = 0;
-int               g_touchCount_Deep      = 0;
-int               g_touchCount_Opt38     = 0;
-bool              g_inBand_Primary       = false;
-bool              g_inBand_Deep          = false;
-bool              g_inBand_Opt38         = false;
-bool              g_leaveEstablished_Primary = false;
-bool              g_leaveEstablished_Deep    = false;
-bool              g_leaveEstablished_Opt38   = false;
-int               g_leaveBarCount_Primary    = 0;
-int               g_leaveBarCount_Deep       = 0;
-int               g_leaveBarCount_Opt38      = 0;
-
-// Touch2成立帯識別
-int               g_touch2BandId       = -1; // 0=Primary, 1=Deep
+// MA Bounce
+int               g_maBounceMAHandle   = INVALID_HANDLE;
+int               g_maBounceATRHandle  = INVALID_HANDLE;
+datetime          g_maBounceLastHTFBarTime = 0;
+double            g_maBounceMAValue    = 0.0;
+double            g_maBounceBandWidth  = 0.0;
 
 // Confirm
 ENUM_CONFIRM_TYPE g_confirmType        = CONFIRM_NONE;
-int               g_confirmWaitBars    = 0;
-
-// MicroBreak用（フラクタル型）
-double            g_microHigh          = 0.0;
-double            g_microLow           = 0.0;
-bool              g_microHighValid     = false;
-bool              g_microLowValid      = false;
-
-// WickRejection状態
-bool              g_wickRejectionSeen  = false;
 
 // Entry / Position
 ENUM_ENTRY_TYPE   g_entryType          = ENTRY_NONE;
@@ -194,14 +172,11 @@ string            g_bandObjName        = "";
 // タイマーカウンタ（Freeze後からのBar数）
 int               g_barsAfterFreeze    = 0;
 
-// Touch2成立後のBar数（Confirm待ち）
-int               g_barsAfterTouch2    = 0;
-
 // Cooldownカウンタ
 int               g_cooldownBars       = 0;
 int               g_cooldownDuration   = 3;
 
-// GOLD DeepBand
+// GOLD DeepBand (Structure Break用に維持)
 bool              g_goldDeepBandON     = false;
 bool              g_riskGateSoftPass   = false;
 
@@ -216,11 +191,6 @@ bool              g_newBar             = false;
 // FreezeCancel後の再監視フラグ
 bool              g_freezeCancelled    = false;
 
-// 離脱開始バー
-datetime          g_leaveStartTime_Primary = 0;
-datetime          g_leaveStartTime_Deep    = 0;
-datetime          g_leaveStartTime_Opt38   = 0;
-
 // ADAPTIVE Spread計算用
 int               g_spreadSampleMinutes = 15;
 
@@ -233,7 +203,7 @@ int               g_exitPendingBars    = 0;
 // ATRハンドル
 int               g_atrHandleM1        = INVALID_HANDLE;
 
-// MA Confluence
+// MA Confluence (ANALYZE用に維持)
 int               g_maPeriods[];
 int               g_maPeriodsCount     = 0;
 int               g_smaHandles[MA_MAX_PERIODS];
@@ -251,7 +221,7 @@ int               g_panelMaxRow        = 0;
 #include "GoldBreakoutFilterEA/Logger.mqh"
 #include "GoldBreakoutFilterEA/MarketProfile.mqh"
 #include "GoldBreakoutFilterEA/ImpulseDetector.mqh"
-#include "GoldBreakoutFilterEA/FibEngine.mqh"
+#include "GoldBreakoutFilterEA/MABounceEngine.mqh"
 #include "GoldBreakoutFilterEA/EntryEngine.mqh"
 #include "GoldBreakoutFilterEA/RiskManager.mqh"
 #include "GoldBreakoutFilterEA/Execution.mqh"
@@ -281,7 +251,7 @@ void ChangeState(ENUM_EA_STATE newState, string reason = "")
    g_currentState  = newState;
 
    if(newState == STATE_IDLE)
-      DeleteCurrentFibVisualization();
+      DeleteMABounceVisualization();
 
    if(newState == STATE_IDLE && LogLevel == LOG_LEVEL_ANALYZE)
    {
@@ -290,10 +260,8 @@ void ChangeState(ENUM_EA_STATE newState, string reason = "")
 
       if(g_stats.RejectStage == "NONE")
       {
-         if(!g_stats.Touch2Reached)
-            g_stats.RejectStage = "NO_TOUCH2";
-         else if(!g_stats.ConfirmReached)
-            g_stats.RejectStage = "NO_CONFIRM";
+         if(!g_stats.ConfirmReached)
+            g_stats.RejectStage = "NO_MA_BOUNCE";
       }
 
       DumpImpulseSummary();
@@ -331,22 +299,12 @@ void ResetAllState()
    g_bandWidthPts = 0;
    g_effectiveBandWidthPts = 0;
 
-   g_primaryBandUpper = 0; g_primaryBandLower = 0;
-   g_deepBandUpper = 0;    g_deepBandLower = 0;
-   g_optBand38Upper = 0;   g_optBand38Lower = 0;
-
-   g_touchCount_Primary = 0; g_touchCount_Deep = 0; g_touchCount_Opt38 = 0;
-   g_inBand_Primary = false; g_inBand_Deep = false; g_inBand_Opt38 = false;
-   g_leaveEstablished_Primary = false; g_leaveEstablished_Deep = false; g_leaveEstablished_Opt38 = false;
-   g_leaveBarCount_Primary = 0; g_leaveBarCount_Deep = 0; g_leaveBarCount_Opt38 = 0;
-   g_touch2BandId = -1;
+   // MA Bounce state
+   g_maBounceLastHTFBarTime = 0;
+   g_maBounceMAValue = 0;
+   g_maBounceBandWidth = 0;
 
    g_confirmType      = CONFIRM_NONE;
-   g_confirmWaitBars  = 0;
-   g_wickRejectionSeen = false;
-
-   g_microHigh = 0; g_microLow = 0;
-   g_microHighValid = false; g_microLowValid = false;
 
    g_entryType  = ENTRY_NONE;
    g_entryPrice = 0;
@@ -355,7 +313,6 @@ void ResetAllState()
    g_positionBars = 0;
 
    g_barsAfterFreeze = 0;
-   g_barsAfterTouch2 = 0;
 
    g_goldDeepBandON   = false;
    g_riskGateSoftPass = false;
@@ -376,9 +333,7 @@ void ProcessStateMachine()
       case STATE_IDLE:                   Process_IDLE(); break;
       case STATE_IMPULSE_FOUND:          Process_IMPULSE_FOUND(); break;
       case STATE_IMPULSE_CONFIRMED:      Process_IMPULSE_CONFIRMED(); break;
-      case STATE_FIB_ACTIVE:             Process_FIB_ACTIVE(); break;
-      case STATE_TOUCH_1:                Process_TOUCH_1(); break;
-      case STATE_TOUCH_2_WAIT_CONFIRM:   Process_TOUCH_2_WAIT_CONFIRM(); break;
+      case STATE_MA_PULLBACK_WAIT:       Process_MA_PULLBACK_WAIT(); break;
       case STATE_ENTRY_PLACED:           Process_ENTRY_PLACED(); break;
       case STATE_IN_POSITION:            Process_IN_POSITION(); break;
       case STATE_COOLDOWN:               Process_COOLDOWN(); break;
@@ -457,30 +412,28 @@ void Process_IMPULSE_FOUND()
 
 void Process_IMPULSE_CONFIRMED()
 {
-   // GOLD DeepBand判定
-   g_goldDeepBandON = EvaluateGoldDeepBand();
-   g_profile.deepBandEnabled = g_goldDeepBandON;
-
-   // BandWidth確定
-   CalculateBandWidth();
-
-   // Fib算出
+   // Fib算出（Structure Break用に維持）
    CalculateFibLevels();
 
-   // 押し帯計算
-   CalculateBands();
+   // MA Bounce セットアップ
+   if(!SetupMABounce())
+   {
+      g_stats.RejectStage = "MA_SETUP_FAIL";
+      ChangeState(STATE_IDLE, "MASetupFailed");
+      ResetAllState();
+      return;
+   }
 
-   // MA Confluence
+   // MA Confluence (ANALYZE用に維持)
    EvaluateMAConfluence();
 
    // 統計記録
    g_stats.RangePts         = MathAbs(g_impulseEnd - g_impulseStart);
-   g_stats.BandWidthPts     = g_effectiveBandWidthPts;
-   g_stats.LeaveDistancePts = g_effectiveBandWidthPts * g_profile.leaveDistanceMult;
+   g_stats.BandWidthPts     = g_maBounceBandWidth;
    g_stats.SpreadBasePts    = g_spreadBasePts;
    {
       double _atr = GetATR_M1(0);
-      double _entry = g_fib500;
+      double _entry = g_maBounceMAValue; // MA値をentry予測に使用
       double _sl = 0.0;
       double _tp = GetExtendedTP();
       double _point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
@@ -494,11 +447,6 @@ void Process_IMPULSE_CONFIRMED()
       double _reward = MathAbs(_tp - _entry);
       g_stats.RR_Actual = (_risk > _point * 0.5) ? (_reward / _risk) : 0.0;
       g_stats.RR_Min    = g_profile.minRR_EntryGate;
-
-      double _cost = (_spread * g_profile.spreadMult) + (g_effectiveBandWidthPts * 2.0) + (g_stats.LeaveDistancePts * 2.0);
-      double _rangeP = g_stats.RangePts;
-      g_stats.RangeCostMult_Actual = (_cost > 0.0) ? (_rangeP / _cost) : 0.0;
-      g_stats.RangeCostMult_Min    = g_profile.minRangeCostMult;
    }
 
    // RiskGate判定
@@ -510,16 +458,12 @@ void Process_IMPULSE_CONFIRMED()
 
       int _d = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
       double _range  = g_stats.RangePts;
-      double _leave  = g_stats.LeaveDistancePts;
       double _spread = SymbolInfoDouble(Symbol(), SYMBOL_ASK) - SymbolInfoDouble(Symbol(), SYMBOL_BID);
-      double _ratio  = (_range > 0.0 ? (g_effectiveBandWidthPts * 2.0) / _range : 999.0);
 
       WriteLog(LOG_REJECT, "", "RISK_GATE_FAIL",
                "range=" + DoubleToString(_range, _d) +
-               ";bw=" + DoubleToString(g_effectiveBandWidthPts, _d) +
-               ";leave=" + DoubleToString(_leave, _d) +
-               ";spread=" + DoubleToString(_spread, _d) +
-               ";band_dom_ratio=" + DoubleToString(_ratio, 3));
+               ";bw=" + DoubleToString(g_maBounceBandWidth, _d) +
+               ";spread=" + DoubleToString(_spread, _d));
 
       if(LogLevel != LOG_LEVEL_ANALYZE)
       {
@@ -536,20 +480,19 @@ void Process_IMPULSE_CONFIRMED()
       g_riskGateSoftPass   = false;
    }
 
-   CreateFibVisualization();
-   ChangeState(STATE_FIB_ACTIVE, "FibCalculated");
+   CreateMABounceVisualization();
+   ChangeState(STATE_MA_PULLBACK_WAIT, "MABounceSetup");
 
    if(DumpFibValues)
    {
-      Print("[FIB] 0=", g_impulseStart, " 100=", g_impulseEnd,
-            " 38.2=", g_fib382, " 50=", g_fib500,
-            " 61.8=", g_fib618, " 78.6=", g_fib786,
-            " BW=", g_bandWidthPts,
-            " DeepBandON=", g_goldDeepBandON);
+      Print("[MA_BOUNCE] 0=", g_impulseStart, " 100=", g_impulseEnd,
+            " MA(", MABounce_Period, ")=", g_maBounceMAValue,
+            " BandWidth=", g_maBounceBandWidth,
+            " HTF=", EnumToString(MABounce_Timeframe));
    }
 }
 
-void Process_FIB_ACTIVE()
+void Process_MA_PULLBACK_WAIT()
 {
    if(!g_newBar) return;
 
@@ -591,10 +534,7 @@ void Process_FIB_ACTIVE()
 
    // FreezeCancel判定
    if(g_frozen &&
-      g_barsAfterFreeze <= g_profile.freezeCancelWindowBars &&
-      g_touchCount_Primary == 0 &&
-      g_touchCount_Deep == 0 &&
-      g_touchCount_Opt38 == 0)
+      g_barsAfterFreeze <= g_profile.freezeCancelWindowBars)
    {
       if(CheckFreezeCancel())
       {
@@ -611,221 +551,36 @@ void Process_FIB_ACTIVE()
       }
    }
 
-   // RetouchTimeLimit
+   // Pullbackタイムアウト
    if(g_barsAfterFreeze > g_profile.retouchTimeLimitBars)
    {
-      g_stats.RejectStage = "RETOUCH_TIMEOUT";
-      ChangeState(STATE_IDLE, "RetouchTimeLimitExpired");
+      g_stats.RejectStage = "MA_PULLBACK_TIMEOUT";
+      ChangeState(STATE_IDLE, "MAPullbackTimeLimitExpired");
       ResetAllState();
       return;
    }
 
-   // タッチ判定
-   int touch1BandId = ProcessTouchesForState();
-
-   if(touch1BandId >= 0)
-   {
-      ChangeState(STATE_TOUCH_1, "Touch1Reached");
-      return;
-   }
-}
-
-// FIB_ACTIVEからのTouch1検出用
-int ProcessTouchesForState()
-{
-   if(g_primaryBandUpper > 0 && g_primaryBandLower > 0)
-   {
-      if(CheckBandEntry(g_primaryBandUpper, g_primaryBandLower))
-      {
-         if(g_touchCount_Primary == 0 && !g_inBand_Primary)
-         {
-            g_inBand_Primary = true;
-            g_touchCount_Primary = 1;
-            RecordTouch1(0);
-            return 0;
-         }
-      }
-      else
-      {
-         if(g_inBand_Primary) g_inBand_Primary = false;
-      }
-   }
-
-   if(g_deepBandUpper > 0 && g_deepBandLower > 0 && g_goldDeepBandON)
-   {
-      if(CheckBandEntry(g_deepBandUpper, g_deepBandLower))
-      {
-         if(g_touchCount_Deep == 0 && !g_inBand_Deep)
-         {
-            g_inBand_Deep = true;
-            g_touchCount_Deep = 1;
-            RecordTouch1(1);
-            return 1;
-         }
-      }
-      else
-      {
-         if(g_inBand_Deep) g_inBand_Deep = false;
-      }
-   }
-
-   return -1;
-}
-
-void Process_TOUCH_1()
-{
-   if(!g_newBar) return;
-
-   g_barsAfterFreeze++;
-
-   if(!IsSpreadOK())
-   {
-      g_stats.RejectStage = "SPREAD_TOO_WIDE";
-      ChangeState(STATE_IDLE, "SpreadTooWide");
-      ResetAllState();
-      return;
-   }
-
-   if(CheckNoEntryRiskGate())
-   {
-      g_stats.RejectStage = "RISK_GATE_FAIL";
-      ChangeState(STATE_IDLE, "RiskGateFail");
-      ResetAllState();
-      return;
-   }
-
-   // 構造無効チェック
-   string br; int pr; string rl; double rp, ap, dp; int sh;
-   if(CheckStructureInvalid_Detail(br, pr, rl, rp, ap, dp, sh))
-   {
-      g_stats.RejectStage         = "STRUCTURE_BREAK";
-      g_stats.StructBreakReason   = br;
-      g_stats.StructBreakPriority = pr;
-      g_stats.StructBreakRefLevel = rl;
-      g_stats.StructBreakRefPrice = rp;
-      g_stats.StructBreakAtPrice  = ap;
-      g_stats.StructBreakDistPts  = dp;
-      g_stats.StructBreakBarShift = sh;
-
-      g_stats.StructBreakSide     = (dp < 0.0 ? "UNDER" : (dp > 0.0 ? "OVER" : "ON"));
-      g_stats.StructBreakAtKind   = "CLOSE";
-
-      if(g_impulseDir == DIR_LONG)
-      {
-         double w = iLow(Symbol(), PERIOD_M1, 1);
-         g_stats.StructBreakWickCross   = (w < rp) ? 1 : 0;
-         g_stats.StructBreakWickDistPts = (w - rp) / _Point;
-      }
-      else
-      {
-         double w = iHigh(Symbol(), PERIOD_M1, 1);
-         g_stats.StructBreakWickCross   = (w > rp) ? 1 : 0;
-         g_stats.StructBreakWickDistPts = (w - rp) / _Point;
-      }
-
-      ChangeState(STATE_IDLE, "StructureInvalid");
-      ResetAllState();
-      return;
-   }
-
-   if(g_barsAfterFreeze > g_profile.retouchTimeLimitBars)
-   {
-      g_stats.RejectStage = "RETOUCH_TIMEOUT";
-      ChangeState(STATE_IDLE, "RetouchTimeLimitExpired");
-      ResetAllState();
-      return;
-   }
-
-   int touch2BandId = ProcessTouches();
-   if(touch2BandId >= 0)
-   {
-      ChangeState(STATE_TOUCH_2_WAIT_CONFIRM, "Touch2Reached");
-      return;
-   }
-}
-
-void Process_TOUCH_2_WAIT_CONFIRM()
-{
-   if(!g_newBar) return;
-
-   g_barsAfterFreeze++;
-
-   if(!IsSpreadOK())
-   {
-      g_stats.RejectStage = "SPREAD_TOO_WIDE";
-      ChangeState(STATE_IDLE, "SpreadTooWide");
-      ResetAllState();
-      return;
-   }
-
-   if(CheckNoEntryRiskGate())
-   {
-      g_stats.RejectStage = "RISK_GATE_FAIL";
-      ChangeState(STATE_IDLE, "RiskGateFail");
-      ResetAllState();
-      return;
-   }
-
-   // 構造無効チェック
-   string br; int pr; string rl; double rp, ap, dp; int sh;
-   if(CheckStructureInvalid_Detail(br, pr, rl, rp, ap, dp, sh))
-   {
-      g_stats.RejectStage         = "STRUCTURE_BREAK";
-      g_stats.StructBreakReason   = br;
-      g_stats.StructBreakPriority = pr;
-      g_stats.StructBreakRefLevel = rl;
-      g_stats.StructBreakRefPrice = rp;
-      g_stats.StructBreakAtPrice  = ap;
-      g_stats.StructBreakDistPts  = dp;
-      g_stats.StructBreakBarShift = sh;
-
-      g_stats.StructBreakSide     = (dp < 0.0 ? "UNDER" : (dp > 0.0 ? "OVER" : "ON"));
-      g_stats.StructBreakAtKind   = "CLOSE";
-
-      if(g_impulseDir == DIR_LONG)
-      {
-         double w = iLow(Symbol(), PERIOD_M1, 1);
-         g_stats.StructBreakWickCross   = (w < rp) ? 1 : 0;
-         g_stats.StructBreakWickDistPts = (w - rp) / _Point;
-      }
-      else
-      {
-         double w = iHigh(Symbol(), PERIOD_M1, 1);
-         g_stats.StructBreakWickCross   = (w > rp) ? 1 : 0;
-         g_stats.StructBreakWickDistPts = (w - rp) / _Point;
-      }
-
-      ChangeState(STATE_IDLE, "StructureInvalid");
-      ResetAllState();
-      return;
-   }
-
-   if(g_barsAfterFreeze > g_profile.retouchTimeLimitBars)
-   {
-      g_stats.RejectStage = "RETOUCH_TIMEOUT";
-      ChangeState(STATE_IDLE, "RetouchTimeLimitExpired");
-      ResetAllState();
-      return;
-   }
-
-   if(g_confirmWaitBars > g_profile.confirmTimeLimitBars)
-   {
-      g_stats.RejectStage = "CONFIRM_TIMEOUT";
-      ChangeState(STATE_IDLE, "ConfirmTimeLimitExpired");
-      ResetAllState();
-      return;
-   }
-
-   UpdateFractalMicroLevels();
-
-   ENUM_CONFIRM_TYPE ct = EvaluateConfirm();
-   if(ct != CONFIRM_NONE)
+   // MA Bounce チェック
+   ENUM_CONFIRM_TYPE ct = CONFIRM_NONE;
+   if(CheckMABounce(ct))
    {
       g_confirmType = ct;
       g_stats.ConfirmCount++;
       g_stats.ConfirmReached = true;
 
-      WriteLog(LOG_CONFIRM, "", "ConfirmOK", "ConfirmType=" + ConfirmTypeToString(ct));
+      WriteLog(LOG_CONFIRM, "", "MABounceConfirm",
+               "ConfirmType=" + ConfirmTypeToString(ct) +
+               ";MA=" + DoubleToString(g_maBounceMAValue, (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS)) +
+               ";BandWidth=" + DoubleToString(g_maBounceBandWidth, (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS)));
+
+      // Spread チェック
+      if(!IsSpreadOK())
+      {
+         g_stats.RejectStage = "SPREAD_TOO_WIDE";
+         ChangeState(STATE_IDLE, "SpreadTooWide");
+         ResetAllState();
+         return;
+      }
 
       if(g_riskGateSoftPass)
       {
@@ -886,7 +641,6 @@ void Process_TOUCH_2_WAIT_CONFIRM()
       ChangeState(STATE_ENTRY_PLACED, "EntryPlaced");
       return;
    }
-   g_confirmWaitBars++;
 }
 
 void Process_ENTRY_PLACED()
@@ -928,14 +682,16 @@ int OnInit()
 
    if(DumpMarketProfile)
    {
-      Print("[PROFILE] MarketMode=GOLD",
+      Print("[PROFILE] MarketMode=GOLD(MA_BOUNCE)",
             " ImpulseATRMult=", g_profile.impulseATRMult,
             " SmallBodyRatio=", g_profile.smallBodyRatio,
             " FreezeCancelWindow=", g_profile.freezeCancelWindowBars,
-            " ConfirmTimeLimit=", g_profile.confirmTimeLimitBars,
             " SpreadMult=", g_profile.spreadMult,
             " SLATRMult=", g_profile.slATRMult,
-            " TPExtRatio=", g_profile.tpExtensionRatio);
+            " TPExtRatio=", g_profile.tpExtensionRatio,
+            " MABounce_TF=", EnumToString(MABounce_Timeframe),
+            " MABounce_Period=", MABounce_Period,
+            " MABounce_BandMult=", MABounce_BandMult);
    }
 
    g_atrHandleM1 = iATR(Symbol(), PERIOD_M1, 14);
@@ -952,6 +708,10 @@ int OnInit()
       Print("ERROR: Failed to create Exit EMA handles. Fast=", g_exitEMAFastHandle, " Slow=", g_exitEMASlowHandle);
       return INIT_FAILED;
    }
+
+   // MA Bounce handles
+   if(!InitMABounceHandles())
+      return INIT_FAILED;
 
    InitMAPeriods();
    for(int i = 0; i < MA_MAX_PERIODS; i++)
@@ -974,7 +734,7 @@ int OnInit()
    g_currentState = STATE_IDLE;
    g_lastBarTime = 0;
 
-   Print(EA_NAME, " initialized. Mode=GOLD");
+   Print(EA_NAME, " v2.1 initialized. Mode=GOLD(MA_BOUNCE)");
 
    return INIT_SUCCEEDED;
 }
@@ -988,7 +748,7 @@ void OnDeinit(const int reason)
    ClearChartStatusPanel();
 
    if(reason != REASON_CHARTCHANGE)
-      DeleteCurrentFibVisualization();
+      DeleteMABounceVisualization();
 
    if(g_atrHandleM1 != INVALID_HANDLE)
    { IndicatorRelease(g_atrHandleM1); g_atrHandleM1 = INVALID_HANDLE; }
@@ -997,6 +757,8 @@ void OnDeinit(const int reason)
    { IndicatorRelease(g_exitEMAFastHandle); g_exitEMAFastHandle = INVALID_HANDLE; }
    if(g_exitEMASlowHandle != INVALID_HANDLE)
    { IndicatorRelease(g_exitEMASlowHandle); g_exitEMASlowHandle = INVALID_HANDLE; }
+
+   ReleaseMABounceHandles();
 
    for(int i = 0; i < g_maPeriodsCount; i++)
    {
@@ -1016,7 +778,7 @@ void OnTick()
 
    // FreezeCancel チェック（Tick単位）
    if(g_frozen && g_currentState >= STATE_IMPULSE_CONFIRMED &&
-      g_currentState <= STATE_TOUCH_1)
+      g_currentState <= STATE_MA_PULLBACK_WAIT)
    {
       if(g_barsAfterFreeze <= g_profile.freezeCancelWindowBars)
       {
@@ -1035,7 +797,7 @@ void OnTick()
 
    ProcessStateMachine();
 
-   if(g_currentState >= STATE_FIB_ACTIVE && g_currentState <= STATE_IN_POSITION)
+   if(g_currentState >= STATE_MA_PULLBACK_WAIT && g_currentState <= STATE_IN_POSITION)
    {
       if(g_bandObjName != "" && ObjectFind(0, g_bandObjName) >= 0)
       {

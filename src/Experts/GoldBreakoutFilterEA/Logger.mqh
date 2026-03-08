@@ -238,15 +238,11 @@ void WriteLog(ENUM_LOG_EVENT event,
 
    double currentSpread = SymbolInfoInteger(Symbol(), SYMBOL_SPREAD) * Point();
 
-   // 押し帯情報（アクティブな帯を出力）
-   double bandLower = g_primaryBandLower;
-   double bandUpper = g_primaryBandUpper;
-   if(g_touch2BandId == 1) { bandLower = g_deepBandLower; bandUpper = g_deepBandUpper; }
-   if(g_touch2BandId == 2) { bandLower = g_optBand38Lower; bandUpper = g_optBand38Upper; }
+   // MA Bounceバンド情報
+   double bandLower = g_maBounceMAValue - g_maBounceBandWidth;
+   double bandUpper = g_maBounceMAValue + g_maBounceBandWidth;
 
-   int totalTouches = g_touchCount_Primary;
-   if(g_touch2BandId == 1) totalTouches = g_touchCount_Deep;
-   if(g_touch2BandId == 2) totalTouches = g_touchCount_Opt38;
+   int totalTouches = g_stats.ConfirmCount;
 
    // ATR値
    double atrVal = GetATR_M1(0);
@@ -340,15 +336,9 @@ void EvaluateMAConfluence()
    g_stats.MA_Eval_Price = evalPrice;
    g_stats.MA_Evaluated = true;
 
-   // アクティブ帯のUpper/Lower取得
-   double bandUpper = g_primaryBandUpper;
-   double bandLower = g_primaryBandLower;
-   // GOLD DeepBandがONの場合はDeepBandを使用
-   if(g_goldDeepBandON && g_deepBandUpper > 0 && g_deepBandLower > 0)
-   {
-      bandUpper = g_deepBandUpper;
-      bandLower = g_deepBandLower;
-   }
+   // MA Bounceバンドを使用
+   double bandUpper = g_maBounceMAValue + g_maBounceBandWidth;
+   double bandLower = g_maBounceMAValue - g_maBounceBandWidth;
 
    double bandCenter = (bandUpper + bandLower) / 2.0;
    double bandWidth  = g_effectiveBandWidthPts;

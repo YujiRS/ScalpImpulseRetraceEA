@@ -260,6 +260,36 @@
 
 ---
 
+### [ADR-017] Entry方式をFib 2-TouchからMA Bounceに変更（GOLD/CRYPTO）
+
+- **日付:** 2026-03-08
+- **状況:** Fib 2-Touch方式（押し帯の2回目タッチ + Confirm）でGOLD/CRYPTOのエントリー精度が十分でなかった。Impulse後のリトレースがFib帯に綺麗に収まらないケースが多い
+- **決定:**
+  - GOLD/CRYPTO: HTF EMA(13) ± ATR(HTF) × band_mult のバンド内タッチ + 反転確認（Close Bounce or Wick Rejection）でエントリー
+  - GOLD: EMA13 @ M15, band_mult = 0.3
+  - CRYPTO: EMA13 @ M5, band_mult = 0.5
+  - FX: 変更なし（Fib 2-Touch方式を維持）
+  - Confirm判定: CONFIRM_CLOSE_BOUNCE(4) / CONFIRM_WICK_REJECTION(1) の2種類
+  - 状態遷移: STATE_FIB_ACTIVE(3) → STATE_MA_PULLBACK_WAIT(3) に名称変更（数値IDは維持）
+  - 旧STATE_TOUCH_1(4) / STATE_TOUCH_2_WAIT_CONFIRM(5) は RESERVED に変更
+  - Fib水準の算出は維持（Structure Break判定用: GOLD=61.8, CRYPTO=78.6）
+- **理由:**
+  - シミュレーション検証でMA Bounce方式がFib 2-Touchより良好な結果（GOLD PF=1.79, BTCUSD PF=1.22）
+  - EMAは動的にトレンド方向の「支持/抵抗」を追従するため、固定Fib帯より市場の変化に適応しやすい
+  - 2-Touch待ちの機会損失を排除（HTF足確定単位での1回判定に簡素化）
+  - MA方向チェック（2バーデルタ）でトレンド方向と逆行するMA接触を除外
+- **没案:**
+  - Fib 2-Touch維持 → GOLD/CRYPTOでの精度不足
+  - SMAベース → EMAの方がトレンド追従が速い
+  - band_mult統一 → 市場のボラティリティ特性が異なるため分離
+- **影響:**
+  - MABounce_Period(13), MABounce_Timeframe, MABounce_BandMult は**Input変更可能**
+  - band_multの最適値は**要検証**（ライブログ蓄積後に調整予定）
+  - ADR-001（2回タッチ必須）はGOLD/CRYPTOでは適用されなくなった（FXのみ有効）
+  - ADR-005（Confirm条件の市場別差異化）はGOLD/CRYPTOではMA Bounce確認に置き換わった
+
+---
+
 ## 未記録の意思決定（コードから推定されるが根拠不明）
 
 以下はコードや仕様書から存在が確認できるが、「なぜそうしたか」の記録が見つからなかったもの。

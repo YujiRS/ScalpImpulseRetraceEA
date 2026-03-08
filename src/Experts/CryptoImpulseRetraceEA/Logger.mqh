@@ -6,24 +6,59 @@
 #ifndef __LOGGER_MQH__
 #define __LOGGER_MQH__
 
-string BuildLogFileName()
+// ログスロット自動連番
+int g_autoRunId = 1;
+int g_lockFileHandle = INVALID_HANDLE;
+
+string BuildLogDateStr()
 {
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
-   string runId = StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
+   return StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
+}
 
-   string fileName = EA_NAME + "_" + runId + "_" + Symbol() + ".tsv";
-   return fileName;
+void AcquireLogSlot()
+{
+   if(RunId > 0)
+   {
+      g_autoRunId = RunId;
+      return;
+   }
+
+   string dateStr = BuildLogDateStr();
+   for(int i = 1; i <= 10; i++)
+   {
+      string lockName = EA_NAME + "_" + dateStr + "_" + Symbol() + "_R" + IntegerToString(i) + ".lock";
+      int h = FileOpen(lockName, FILE_WRITE | FILE_TXT);
+      if(h != INVALID_HANDLE)
+      {
+         g_lockFileHandle = h;
+         g_autoRunId = i;
+         return;
+      }
+   }
+   g_autoRunId = 1;
+}
+
+void ReleaseLogSlot()
+{
+   if(g_lockFileHandle != INVALID_HANDLE)
+   {
+      FileClose(g_lockFileHandle);
+      g_lockFileHandle = INVALID_HANDLE;
+   }
+}
+
+string BuildLogFileName()
+{
+   string dateStr = BuildLogDateStr();
+   return EA_NAME + "_" + dateStr + "_" + Symbol() + "_R" + IntegerToString(g_autoRunId) + ".tsv";
 }
 
 string BuildSummaryFileName()
 {
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-   string runId = StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
-
-   string fileName = EA_NAME + "_SUMMARY_" + runId + "_" + Symbol() + ".tsv";
-   return fileName;
+   string dateStr = BuildLogDateStr();
+   return EA_NAME + "_SUMMARY_" + dateStr + "_" + Symbol() + "_R" + IntegerToString(g_autoRunId) + ".tsv";
 }
 
 void LoggerInit()
@@ -31,11 +66,13 @@ void LoggerInit()
    if(LogLevel == LOG_LEVEL_OFF)
       return;
 
+   AcquireLogSlot();
    g_logFileName = BuildLogFileName();
 
    bool exists = FileIsExist(g_logFileName);
 
-   g_logFileHandle = FileOpen(g_logFileName, FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_SHARE_READ, '\t');
+   // FILE_SHARE_WRITE: 複数インスタンス起動時の並行書き込みを許可
+   g_logFileHandle = FileOpen(g_logFileName, FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE, '\t');
 
    if(g_logFileHandle == INVALID_HANDLE)
    {
@@ -66,6 +103,7 @@ void LoggerDeinit()
       FileClose(g_logFileHandle);
       g_logFileHandle = INVALID_HANDLE;
    }
+   ReleaseLogSlot();
 }
 
 // ImpulseSummary TSV出力
@@ -264,7 +302,7 @@ string GenerateTradeUUID()
    TimeToStruct(TimeCurrent(), dt);
    string ts = StringFormat("%04d%02d%02d%02d%02d%02d",
                             dt.year, dt.mon, dt.day, dt.hour, dt.min, dt.sec);
-   string runStr = StringFormat("%02d", RunId);
+   string runStr = StringFormat("%02d", g_autoRunId);
    return ts + "_" + Symbol() + "_" + runStr;
 }
 

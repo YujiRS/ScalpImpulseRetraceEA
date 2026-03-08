@@ -15,6 +15,7 @@
 #include "RoleReversalEA/Constants.mqh"
 #include "RoleReversalEA/SRDetector.mqh"
 #include "RoleReversalEA/ConfirmEngine.mqh"
+#include "RoleReversalEA/Logger.mqh"
 
 //+------------------------------------------------------------------+
 //| Inputs                                                            |
@@ -112,6 +113,177 @@ double        g_posTP = 0;
 #include "RoleReversalEA/Visualization.mqh"
 
 //+------------------------------------------------------------------+
+//| GlobalVariable key helper                                         |
+//+------------------------------------------------------------------+
+string RR_GVKey(string varName)
+{
+   return "RR_" + Symbol() + "_" + IntegerToString(g_magic) + "_" + varName;
+}
+
+//+------------------------------------------------------------------+
+//| Save state to GlobalVariables (TF change only)                    |
+//+------------------------------------------------------------------+
+void SaveStateForTFChange()
+{
+   // Only save if in a meaningful intermediate state or in position
+   if(g_state == RR_IDLE || g_state == RR_COOLDOWN)
+      return;
+
+   GlobalVariableSet(RR_GVKey("state"),     (double)g_state);
+   GlobalVariableSet(RR_GVKey("boDir"),      (double)g_breakoutDir);
+   GlobalVariableSet(RR_GVKey("boBar"),      (double)g_breakoutBar);
+   GlobalVariableSet(RR_GVKey("confCnt"),    (double)g_confirmCount);
+   GlobalVariableSet(RR_GVKey("m5Cnt"),      (double)g_m5BarCount);
+   GlobalVariableSet(RR_GVKey("lastM5"),     (double)g_lastM5Bar);
+   GlobalVariableSet(RR_GVKey("lastH1"),     (double)g_lastH1Bar);
+   GlobalVariableSet(RR_GVKey("h1Ref"),      (double)g_h1BarsSinceRefresh);
+   GlobalVariableSet(RR_GVKey("confirm"),    (double)g_lastConfirm);
+   GlobalVariableSet(RR_GVKey("ticket"),     (double)g_posTicket);
+
+   // Save breakout level price (not index, since S/R gets re-detected)
+   double boPrice = 0;
+   if(g_breakoutLevelIdx >= 0 && g_breakoutLevelIdx < g_srCount)
+      boPrice = g_srLevels[g_breakoutLevelIdx].price;
+   GlobalVariableSet(RR_GVKey("boPrice"), boPrice);
+
+   // Save broken/used S/R level prices for re-application
+   int brokenCnt = 0;
+   for(int i = 0; i < g_srCount; i++)
+   {
+      if(g_srLevels[i].broken || g_srLevels[i].used)
+      {
+         GlobalVariableSet(RR_GVKey("brk_" + IntegerToString(brokenCnt)), g_srLevels[i].price);
+         // Encode flags: 1=broken only, 2=used only, 3=both
+         double flags = (g_srLevels[i].broken ? 1 : 0) + (g_srLevels[i].used ? 2 : 0);
+         GlobalVariableSet(RR_GVKey("brkF_" + IntegerToString(brokenCnt)), flags);
+         GlobalVariableSet(RR_GVKey("brkD_" + IntegerToString(brokenCnt)), (double)g_srLevels[i].broken_direction);
+         GlobalVariableSet(RR_GVKey("brkT_" + IntegerToString(brokenCnt)), (double)g_srLevels[i].broken_time);
+         brokenCnt++;
+      }
+   }
+   GlobalVariableSet(RR_GVKey("brokenCnt"), (double)brokenCnt);
+
+   if(LogLevel >= RR_LOG_DEBUG)
+      Print("State saved for TF change: ", RRStateToString(g_state),
+            " brokenLevels=", brokenCnt);
+}
+
+//+------------------------------------------------------------------+
+//| Load state from GlobalVariables (after TF change)                 |
+//+------------------------------------------------------------------+
+bool LoadStateFromTFChange()
+{
+   if(!GlobalVariableCheck(RR_GVKey("state")))
+      return false;
+
+   int savedState = (int)GlobalVariableGet(RR_GVKey("state"));
+
+   // Validate state range
+   if(savedState < RR_BREAKOUT_DETECTED || savedState > RR_IN_POSITION)
+   {
+      ClearSavedState();
+      return false;
+   }
+
+   g_state              = (ENUM_RR_STATE)savedState;
+   g_breakoutDir        = (int)GlobalVariableGet(RR_GVKey("boDir"));
+   g_breakoutBar        = (int)GlobalVariableGet(RR_GVKey("boBar"));
+   g_confirmCount       = (int)GlobalVariableGet(RR_GVKey("confCnt"));
+   g_m5BarCount         = (int)GlobalVariableGet(RR_GVKey("m5Cnt"));
+   g_lastM5Bar          = (datetime)(long)GlobalVariableGet(RR_GVKey("lastM5"));
+   g_lastH1Bar          = (datetime)(long)GlobalVariableGet(RR_GVKey("lastH1"));
+   g_h1BarsSinceRefresh = (int)GlobalVariableGet(RR_GVKey("h1Ref"));
+   g_lastConfirm        = (ENUM_CONFIRM_PATTERN)(int)GlobalVariableGet(RR_GVKey("confirm"));
+   g_posTicket          = (ulong)GlobalVariableGet(RR_GVKey("ticket"));
+
+   // Re-apply broken/used status to newly detected S/R levels
+   int brokenCnt = (int)GlobalVariableGet(RR_GVKey("brokenCnt"));
+   double h1ATR[];
+   ArraySetAsSeries(h1ATR, true);
+   CopyBuffer(g_atrH1Handle, 0, 0, 5, h1ATR);
+   double tolerance = (ArraySize(h1ATR) > 0) ? h1ATR[0] * 0.1 : 0;
+
+   for(int b = 0; b < brokenCnt; b++)
+   {
+      double brkPrice = GlobalVariableGet(RR_GVKey("brk_" + IntegerToString(b)));
+      int    brkFlags = (int)GlobalVariableGet(RR_GVKey("brkF_" + IntegerToString(b)));
+      int    brkDir   = (int)GlobalVariableGet(RR_GVKey("brkD_" + IntegerToString(b)));
+      datetime brkTime = (datetime)(long)GlobalVariableGet(RR_GVKey("brkT_" + IntegerToString(b)));
+
+      for(int si = 0; si < g_srCount; si++)
+      {
+         if(MathAbs(g_srLevels[si].price - brkPrice) < tolerance)
+         {
+            if((brkFlags & 1) != 0)
+            {
+               g_srLevels[si].broken = true;
+               g_srLevels[si].broken_direction = brkDir;
+               g_srLevels[si].broken_time = brkTime;
+            }
+            if((brkFlags & 2) != 0)
+               g_srLevels[si].used = true;
+            break;
+         }
+      }
+   }
+
+   // Re-sync g_breakoutLevelIdx by price
+   double savedBoPrice = GlobalVariableGet(RR_GVKey("boPrice"));
+   g_breakoutLevelIdx = -1;
+
+   if(savedBoPrice > 0 && g_state >= RR_BREAKOUT_DETECTED && g_state <= RR_PULLBACK_AT_LEVEL)
+   {
+      for(int si = 0; si < g_srCount; si++)
+      {
+         if(MathAbs(g_srLevels[si].price - savedBoPrice) < tolerance)
+         {
+            g_breakoutLevelIdx = si;
+            break;
+         }
+      }
+
+      if(g_breakoutLevelIdx < 0)
+      {
+         // Breakout level disappeared after re-detection
+         if(LogLevel >= RR_LOG_DEBUG)
+            Print("WARNING: Breakout level lost after TF change. Falling back to IDLE.");
+         g_state = RR_IDLE;
+         ClearSavedState();
+         return true;
+      }
+   }
+
+   if(LogLevel >= RR_LOG_DEBUG)
+      Print("State restored after TF change: ", RRStateToString(g_state));
+
+   ClearSavedState();
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Clear saved GlobalVariables                                       |
+//+------------------------------------------------------------------+
+void ClearSavedState()
+{
+   string keys[] = {"state", "boPrice", "boDir", "boBar", "confCnt",
+                     "m5Cnt", "lastM5", "lastH1", "h1Ref", "confirm",
+                     "ticket", "brokenCnt"};
+   for(int i = 0; i < ArraySize(keys); i++)
+      GlobalVariableDel(RR_GVKey(keys[i]));
+
+   // Delete dynamic broken level keys
+   for(int i = 0; i < MAX_SR_LEVELS; i++)
+   {
+      if(!GlobalVariableCheck(RR_GVKey("brk_" + IntegerToString(i))))
+         break;
+      GlobalVariableDel(RR_GVKey("brk_" + IntegerToString(i)));
+      GlobalVariableDel(RR_GVKey("brkF_" + IntegerToString(i)));
+      GlobalVariableDel(RR_GVKey("brkD_" + IntegerToString(i)));
+      GlobalVariableDel(RR_GVKey("brkT_" + IntegerToString(i)));
+   }
+}
+
+//+------------------------------------------------------------------+
 //| OnInit                                                             |
 //+------------------------------------------------------------------+
 int OnInit()
@@ -142,6 +314,12 @@ int OnInit()
    DetectSRLevels(SR_SwingLookback, avgATR * SR_MergeTolerance, SR_MaxAge);
    CountSRTouches(SR_MergeTolerance);
 
+   // Try to restore state from TF change (before DrawSRLevels so broken/used status is applied)
+   bool stateRestored = LoadStateFromTFChange();
+
+   // ファイルログ初期化
+   RR_LoggerInit();
+
    Print("RoleReversalEA v1.0 initialized. S/R levels: ", g_srCount, " Magic: ", g_magic);
    for(int i = 0; i < g_srCount; i++)
    {
@@ -156,7 +334,30 @@ int OnInit()
    // Check for existing position
    CheckExistingPosition();
 
-   g_state = (g_posTicket > 0) ? RR_IN_POSITION : RR_IDLE;
+   if(!stateRestored)
+   {
+      g_state = (g_posTicket > 0) ? RR_IN_POSITION : RR_IDLE;
+   }
+   else
+   {
+      // If restored state says IN_POSITION but no position found, fall back to IDLE
+      if(g_state == RR_IN_POSITION && g_posTicket == 0)
+         g_state = RR_IDLE;
+
+      // Redraw pullback zone if in breakout/pullback state
+      if(g_state >= RR_BREAKOUT_DETECTED && g_state <= RR_PULLBACK_AT_LEVEL
+         && g_breakoutLevelIdx >= 0)
+      {
+         double atrBuf[];
+         ArraySetAsSeries(atrBuf, true);
+         CopyBuffer(g_atrM5Handle, 0, 0, 2, atrBuf);
+         if(ArraySize(atrBuf) > 0)
+            DrawPullbackZone(g_breakoutLevelIdx, atrBuf[0]);
+      }
+   }
+
+   // Show status panel immediately (don't wait for first tick)
+   UpdateChartStatusPanel();
 
    return INIT_SUCCEEDED;
 }
@@ -166,6 +367,11 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   // Save state only on timeframe change (reason 3)
+   if(reason == REASON_CHARTCHANGE)
+      SaveStateForTFChange();
+
+   RR_LoggerDeinit();
    ClearChartStatusPanel();
 
    if(g_emaM5Handle != INVALID_HANDLE) IndicatorRelease(g_emaM5Handle);
@@ -190,6 +396,9 @@ void OnTick()
       return;  // Same bar
    g_lastM5Bar = m5Times[0];
    g_m5BarCount++;
+
+   // 日付変更時のログファイルローテーション
+   RR_LoggerCheckRotate();
 
    // Refresh S/R periodically
    datetime h1Times[];
@@ -399,6 +608,8 @@ void ScanForBreakout()
          if(LogLevel >= RR_LOG_DEBUG)
             Print("BREAKOUT UP detected @ ", DoubleToString(levelPrice, _Digits),
                   " bar=", g_m5BarCount);
+         RR_WriteLog(RR_LOG_BREAKOUT, RR_DIR_LONG, levelPrice, currClose,
+                     0, 0, "", "DETECTED bar=" + IntegerToString(g_m5BarCount));
          return;
       }
 
@@ -435,6 +646,8 @@ void ScanForBreakout()
          if(LogLevel >= RR_LOG_DEBUG)
             Print("BREAKOUT DOWN detected @ ", DoubleToString(levelPrice, _Digits),
                   " bar=", g_m5BarCount);
+         RR_WriteLog(RR_LOG_BREAKOUT, RR_DIR_SHORT, levelPrice, currClose,
+                     0, 0, "", "DETECTED bar=" + IntegerToString(g_m5BarCount));
          return;
       }
    }
@@ -487,6 +700,8 @@ void ConfirmBreakout()
       g_state = RR_WAITING_PULLBACK;
       if(LogLevel >= RR_LOG_DEBUG)
          Print("BREAKOUT CONFIRMED. Waiting for pullback...");
+      RR_WriteLog(RR_LOG_BREAKOUT, g_breakoutDir, levelPrice, 0, 0, 0, "",
+                  "CONFIRMED count=" + IntegerToString(g_confirmCount));
    }
 }
 
@@ -590,6 +805,7 @@ void WaitForPullbackAndConfirm()
       {
          if(LogLevel >= RR_LOG_ANALYZE)
             Print("REJECT: EMA trend against direction");
+         RR_WriteLog(RR_LOG_REJECT, tradeDir, levelPrice, 0, 0, 0, "", "EMA_TREND_AGAINST");
          return;
       }
    }
@@ -602,6 +818,7 @@ void WaitForPullbackAndConfirm()
       {
          if(LogLevel >= RR_LOG_ANALYZE)
             Print("REJECT: EMA not supporting long");
+         RR_WriteLog(RR_LOG_REJECT, tradeDir, levelPrice, 0, 0, 0, "", "EMA_NOT_SUPPORT_LONG");
          return;
       }
    }
@@ -611,6 +828,7 @@ void WaitForPullbackAndConfirm()
       {
          if(LogLevel >= RR_LOG_ANALYZE)
             Print("REJECT: EMA not supporting short");
+         RR_WriteLog(RR_LOG_REJECT, tradeDir, levelPrice, 0, 0, 0, "", "EMA_NOT_SUPPORT_SHORT");
          return;
       }
    }
@@ -628,6 +846,7 @@ void WaitForPullbackAndConfirm()
    {
       if(LogLevel >= RR_LOG_ANALYZE)
          Print("REJECT: No confirm pattern");
+      RR_WriteLog(RR_LOG_REJECT, tradeDir, levelPrice, m5Close[1], 0, 0, "", "NO_CONFIRM_PATTERN");
       return;
    }
 
@@ -654,6 +873,8 @@ void WaitForPullbackAndConfirm()
       if(LogLevel >= RR_LOG_DEBUG)
          Print("REJECT: SL too wide. slDist=", DoubleToString(slDist, _Digits),
                " limit=", DoubleToString(atrVal * MaxSL_ATR, _Digits));
+      RR_WriteLog(RR_LOG_REJECT, tradeDir, levelPrice, entry, sl, 0, "",
+                  "SL_TOO_WIDE dist=" + DoubleToString(slDist, _Digits));
       return;
    }
 
@@ -697,6 +918,8 @@ void WaitForPullbackAndConfirm()
          DeletePullbackZone(g_breakoutLevelIdx);
          DrawSRLevels();
 
+         RR_WriteLog(RR_LOG_ENTRY, tradeDir, levelPrice, entry, sl, tp,
+                     ConfirmPatternName(confirm), "");
          string confirmName = ConfirmPatternName(confirm);
          string msg = StringFormat("RoleReversal ENTRY: %s @ %s SL=%s TP=%s Pattern=%s Level=%s",
                                     (tradeDir == RR_DIR_LONG ? "LONG" : "SHORT"),
@@ -829,6 +1052,7 @@ void ManagePosition()
    if(!CheckExistingPosition())
    {
       Print("Position closed externally or by SL/TP");
+      RR_WriteLog(RR_LOG_EXIT, 0, 0, 0, 0, 0, "", "CLOSED_EXTERNALLY_OR_SLTP");
       g_state = RR_COOLDOWN;
       g_posTicket = 0;
       ResetState();

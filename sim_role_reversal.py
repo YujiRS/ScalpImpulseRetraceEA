@@ -70,6 +70,13 @@ USE_FIXED_RR_TP = True          # True: fixed R:R TP, False: next H1 level TP
 ENABLE_BREAKEVEN = True         # Enable breakeven (SL → Entry) at threshold
 BE_RR_THRESHOLD = 1.0           # R:R threshold to trigger breakeven
 
+# -- Market-specific breakeven defaults
+MARKET_BREAKEVEN_DEFAULTS = {
+    "GOLD":   {"enable": True,  "threshold": 1.5},
+    "FX":     {"enable": False, "threshold": 1.0},
+    "CRYPTO": {"enable": False, "threshold": 1.0},
+}
+
 # -- Market-specific
 POINT_VALUE = 0.01              # GOLD: 0.01, FX: 0.001 or 0.01
 
@@ -1171,7 +1178,11 @@ if __name__ == "__main__":
                         help="Breakeven R:R threshold (overrides BE_RR_THRESHOLD)")
     args = parser.parse_args()
 
-    # Apply breakeven CLI overrides
+    # Apply market-specific breakeven defaults, then CLI overrides
+    be_defaults = MARKET_BREAKEVEN_DEFAULTS.get(args.market, {})
+    ENABLE_BREAKEVEN = be_defaults.get("enable", True)
+    BE_RR_THRESHOLD = be_defaults.get("threshold", 1.0)
+
     if args.no_breakeven:
         ENABLE_BREAKEVEN = False
     if args.be_threshold is not None:

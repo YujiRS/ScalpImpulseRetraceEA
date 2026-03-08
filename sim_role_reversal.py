@@ -1165,14 +1165,25 @@ if __name__ == "__main__":
                         help="Run parameter sweep")
     parser.add_argument("--data", type=str, default=None,
                         help="Path to M1 CSV data file")
+    parser.add_argument("--no-breakeven", action="store_true",
+                        help="Disable breakeven logic (baseline)")
+    parser.add_argument("--be-threshold", type=float, default=None,
+                        help="Breakeven R:R threshold (overrides BE_RR_THRESHOLD)")
     args = parser.parse_args()
+
+    # Apply breakeven CLI overrides
+    if args.no_breakeven:
+        ENABLE_BREAKEVEN = False
+    if args.be_threshold is not None:
+        ENABLE_BREAKEVEN = True
+        BE_RR_THRESHOLD = args.be_threshold
 
     # Default data paths
     data_paths = {
         "GOLD": os.path.join("sim_dat",
                              "GOLD#_M1_202509010100_202511282139.csv"),
         "FX": os.path.join("sim_dat",
-                           "USDJPY#_M1_202602020000_202602160000.csv"),
+                           "USDJPY#_M1_202512010000_202602270000.csv"),
         "CRYPTO": os.path.join("sim_dat",
                                "BTCUSD#_M1_202512010000_202602270000.csv"),
     }

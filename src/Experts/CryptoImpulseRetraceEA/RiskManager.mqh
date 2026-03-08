@@ -114,6 +114,7 @@ void PreviewSLTP(double entryPrice, double &outSL, double &outTP)
 
 //+------------------------------------------------------------------+
 //| ロット計算: RISK_PERCENT モード                                     |
+//| FreeMargin上限チェック付き                                          |
 //+------------------------------------------------------------------+
 double CalcRiskPercentLot(double entryPrice, double slPrice)
 {
@@ -137,6 +138,21 @@ double CalcRiskPercentLot(double entryPrice, double slPrice)
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
    rawLot = MathMax(minLot, MathMin(maxLot, rawLot));
+
+   //--- FreeMargin上限チェック: 算出ロットが実際に建てられるか検証
+   ENUM_ORDER_TYPE orderType = (entryPrice > slPrice) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   double margin = 0;
+   if(freeMargin > 0 && OrderCalcMargin(orderType, _Symbol, rawLot, entryPrice, margin))
+   {
+      if(margin > freeMargin * 0.95)
+      {
+         double maxAffordLot = rawLot * (freeMargin * 0.95) / margin;
+         maxAffordLot = MathFloor(maxAffordLot / lotStep) * lotStep;
+         rawLot = MathMax(minLot, maxAffordLot);
+      }
+   }
+
    rawLot = MathFloor(rawLot / lotStep) * lotStep;
 
    return NormalizeDouble(rawLot, 8);

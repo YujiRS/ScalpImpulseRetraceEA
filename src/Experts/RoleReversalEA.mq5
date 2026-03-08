@@ -736,11 +736,11 @@ bool ExecuteEntry(int direction, double sl, double tp, ENUM_CONFIRM_PATTERN conf
 
    request.action = TRADE_ACTION_DEAL;
    request.symbol = Symbol();
-   request.volume = CalculateLot(MathAbs(sl - SymbolInfoDouble(Symbol(), SYMBOL_BID)));
    request.type = (direction == RR_DIR_LONG) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    request.price = (direction == RR_DIR_LONG) ?
                     SymbolInfoDouble(Symbol(), SYMBOL_ASK) :
                     SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   request.volume = CalculateLot(request.price, sl);
    request.sl = NormalizeDouble(sl, _Digits);
    request.tp = NormalizeDouble(tp, _Digits);
    request.deviation = 20;
@@ -777,7 +777,7 @@ bool ExecuteEntry(int direction, double sl, double tp, ENUM_CONFIRM_PATTERN conf
 //+------------------------------------------------------------------+
 //| Calculate lot size                                                 |
 //+------------------------------------------------------------------+
-double CalculateLot(double slDistance)
+double CalculateLot(double entryPrice, double slPrice)
 {
    if(LotMode == RR_LOT_FIXED)
       return FixedLot;
@@ -787,6 +787,7 @@ double CalculateLot(double slDistance)
    double riskAmount = equity * RiskPercent / 100.0;
    double tickValue = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_VALUE);
    double tickSize = SymbolInfoDouble(Symbol(), SYMBOL_TRADE_TICK_SIZE);
+   double slDistance = MathAbs(entryPrice - slPrice);
 
    if(tickValue <= 0 || tickSize <= 0 || slDistance <= 0)
       return FixedLot;
@@ -799,6 +800,21 @@ double CalculateLot(double slDistance)
    double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
 
    lot = MathMax(lotMin, MathMin(lotMax, lot));
+
+   //--- FreeMargin上限チェック: 算出ロットが実際に建てられるか検証
+   ENUM_ORDER_TYPE orderType = (entryPrice > slPrice) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   double margin = 0;
+   if(freeMargin > 0 && OrderCalcMargin(orderType, Symbol(), lot, entryPrice, margin))
+   {
+      if(margin > freeMargin * 0.95)
+      {
+         double maxAffordLot = lot * (freeMargin * 0.95) / margin;
+         maxAffordLot = MathFloor(maxAffordLot / lotStep) * lotStep;
+         lot = MathMax(lotMin, maxAffordLot);
+      }
+   }
+
    lot = MathFloor(lot / lotStep) * lotStep;
 
    return NormalizeDouble(lot, 2);

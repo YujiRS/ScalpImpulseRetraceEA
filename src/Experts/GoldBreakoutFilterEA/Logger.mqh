@@ -5,25 +5,61 @@
 #ifndef __LOGGER_MQH__
 #define __LOGGER_MQH__
 
-// 第13.5章: ログファイル命名規則
-string BuildLogFileName()
+// ログスロット自動連番
+int g_autoRunId = 1;
+int g_lockFileHandle = INVALID_HANDLE;
+
+string BuildLogDateStr()
 {
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
-   string dateStr = StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
+   return StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
+}
 
-   string fileName = EA_NAME + "_" + dateStr + "_" + Symbol() + "_R" + IntegerToString(RunId) + ".tsv";
-   return fileName;
+void AcquireLogSlot()
+{
+   // RunId > 0 → ユーザー手動指定を優先
+   if(RunId > 0)
+   {
+      g_autoRunId = RunId;
+      return;
+   }
+
+   string dateStr = BuildLogDateStr();
+   for(int i = 1; i <= 10; i++)
+   {
+      string lockName = EA_NAME + "_" + dateStr + "_" + Symbol() + "_R" + IntegerToString(i) + ".lock";
+      int h = FileOpen(lockName, FILE_WRITE | FILE_TXT);
+      if(h != INVALID_HANDLE)
+      {
+         g_lockFileHandle = h;
+         g_autoRunId = i;
+         return;
+      }
+   }
+   // フォールバック
+   g_autoRunId = 1;
+}
+
+void ReleaseLogSlot()
+{
+   if(g_lockFileHandle != INVALID_HANDLE)
+   {
+      FileClose(g_lockFileHandle);
+      g_lockFileHandle = INVALID_HANDLE;
+   }
+}
+
+string BuildLogFileName()
+{
+   string dateStr = BuildLogDateStr();
+   return EA_NAME + "_" + dateStr + "_" + Symbol() + "_R" + IntegerToString(g_autoRunId) + ".tsv";
 }
 
 string BuildSummaryFileName()
 {
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-   string dateStr = StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
-
-   string fileName = EA_NAME + "_SUMMARY_" + dateStr + "_" + Symbol() + "_R" + IntegerToString(RunId) + ".tsv";
-   return fileName;
+   string dateStr = BuildLogDateStr();
+   return EA_NAME + "_SUMMARY_" + dateStr + "_" + Symbol() + "_R" + IntegerToString(g_autoRunId) + ".tsv";
 }
 
 void LoggerInit()
@@ -31,6 +67,7 @@ void LoggerInit()
    if(LogLevel == LOG_LEVEL_OFF)
       return;
 
+   AcquireLogSlot();
    g_logFileName = BuildLogFileName();
 
    // 既存ファイルがあれば追記、無ければ新規作成してヘッダ出力
@@ -72,6 +109,7 @@ void LoggerDeinit()
       FileClose(g_logFileHandle);
       g_logFileHandle = INVALID_HANDLE;
    }
+   ReleaseLogSlot();
 }
 
 // === ANALYZE追加 === ImpulseSummary TSV出力（1 Impulse = 1行）
@@ -288,7 +326,7 @@ string GenerateTradeUUID()
    TimeToStruct(TimeCurrent(), dt);
    string ts = StringFormat("%04d%02d%02d%02d%02d%02d",
                             dt.year, dt.mon, dt.day, dt.hour, dt.min, dt.sec);
-   string runStr = StringFormat("%02d", RunId);
+   string runStr = StringFormat("%02d", g_autoRunId);
    return ts + "_" + Symbol() + "_" + runStr;
 }
 

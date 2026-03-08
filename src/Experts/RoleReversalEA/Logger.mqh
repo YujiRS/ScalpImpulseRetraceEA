@@ -53,13 +53,46 @@ string RRStateToString(ENUM_RR_STATE st)
 //--- グローバル変数
 string g_rrLogFileName = "";
 int    g_rrLogFileHandle = INVALID_HANDLE;
+int    g_rrAutoInstanceId = 1;
+int    g_rrLockFileHandle = INVALID_HANDLE;
 
-string RR_BuildLogFileName()
+string RR_BuildLogDateStr()
 {
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
-   string dateStr = StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
-   return RR_EA_NAME + "_" + dateStr + "_" + Symbol() + "_M" + IntegerToString(MagicOffset) + ".tsv";
+   return StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
+}
+
+void RR_AcquireLogSlot()
+{
+   string dateStr = RR_BuildLogDateStr();
+   for(int i = 1; i <= 10; i++)
+   {
+      string lockName = RR_EA_NAME + "_" + dateStr + "_" + Symbol() + "_M" + IntegerToString(i) + ".lock";
+      int h = FileOpen(lockName, FILE_WRITE | FILE_TXT);
+      if(h != INVALID_HANDLE)
+      {
+         g_rrLockFileHandle = h;
+         g_rrAutoInstanceId = i;
+         return;
+      }
+   }
+   g_rrAutoInstanceId = 1;
+}
+
+void RR_ReleaseLogSlot()
+{
+   if(g_rrLockFileHandle != INVALID_HANDLE)
+   {
+      FileClose(g_rrLockFileHandle);
+      g_rrLockFileHandle = INVALID_HANDLE;
+   }
+}
+
+string RR_BuildLogFileName()
+{
+   string dateStr = RR_BuildLogDateStr();
+   return RR_EA_NAME + "_" + dateStr + "_" + Symbol() + "_M" + IntegerToString(g_rrAutoInstanceId) + ".tsv";
 }
 
 void RR_LoggerInit()
@@ -67,6 +100,7 @@ void RR_LoggerInit()
    if(LogLevel == RR_LOG_NORMAL)  // RR_LOG_NORMAL==0 はログなし扱い（Print()のみ）
       return;
 
+   RR_AcquireLogSlot();
    g_rrLogFileName = RR_BuildLogFileName();
    bool exists = FileIsExist(g_rrLogFileName);
 
@@ -99,6 +133,7 @@ void RR_LoggerDeinit()
       FileClose(g_rrLogFileHandle);
       g_rrLogFileHandle = INVALID_HANDLE;
    }
+   RR_ReleaseLogSlot();
 }
 
 //--- 日付変更時のファイルローテーション
@@ -111,11 +146,18 @@ void RR_LoggerCheckRotate()
       return;
    }
 
-   string newName = RR_BuildLogFileName();
-   if(newName != g_rrLogFileName)
+   string newDateStr = RR_BuildLogDateStr();
+   string currentDateStr = "";
+   if(g_rrLogFileName != "")
    {
-      RR_LoggerDeinit();
-      RR_LoggerInit();
+      // 現在のファイル名から日付部分を抽出して比較
+      int datePos = StringFind(g_rrLogFileName, "_") + 1;
+      currentDateStr = StringSubstr(g_rrLogFileName, datePos, 8);
+   }
+   if(newDateStr != currentDateStr)
+   {
+      RR_LoggerDeinit();  // ログ+ロック両方解放
+      RR_LoggerInit();    // ロック再取得+ログ再オープン
    }
 }
 

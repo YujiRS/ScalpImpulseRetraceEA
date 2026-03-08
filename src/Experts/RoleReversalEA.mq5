@@ -201,8 +201,51 @@ void OnTick()
       g_h1BarsSinceRefresh++;
       if(g_h1BarsSinceRefresh >= SR_RefreshInterval)
       {
+         // リフレッシュ前: アクティブなブレイクアウトレベルの価格を保存
+         double savedBreakoutPrice = 0;
+         bool hasActiveBreakout = (g_breakoutLevelIdx >= 0 && g_breakoutLevelIdx < g_srCount &&
+                                   g_state >= RR_BREAKOUT_DETECTED && g_state <= RR_PULLBACK_AT_LEVEL);
+         if(hasActiveBreakout)
+            savedBreakoutPrice = g_srLevels[g_breakoutLevelIdx].price;
+
          RefreshSRLevels();
          DrawSRLevels();
+
+         // リフレッシュ後: g_breakoutLevelIdx を価格ベースで再同期
+         if(hasActiveBreakout)
+         {
+            double h1ATR[];
+            ArraySetAsSeries(h1ATR, true);
+            CopyBuffer(g_atrH1Handle, 0, 0, 5, h1ATR);
+            double tolerance = (ArraySize(h1ATR) > 0) ? h1ATR[0] * 0.1 : 0;
+            int newIdx = -1;
+            for(int si = 0; si < g_srCount; si++)
+            {
+               if(MathAbs(g_srLevels[si].price - savedBreakoutPrice) < tolerance)
+               {
+                  newIdx = si;
+                  break;
+               }
+            }
+            if(newIdx >= 0)
+            {
+               g_breakoutLevelIdx = newIdx;
+               // アクティブなPullback Zoneを再描画
+               double atrBuf[];
+               ArraySetAsSeries(atrBuf, true);
+               CopyBuffer(g_atrM5Handle, 0, 0, 2, atrBuf);
+               if(ArraySize(atrBuf) > 0)
+                  DrawPullbackZone(newIdx, atrBuf[0]);
+            }
+            else
+            {
+               // レベルがリフレッシュで消えた → ステート破棄
+               if(LogLevel >= RR_LOG_DEBUG)
+                  Print("BREAKOUT LEVEL LOST after S/R refresh. Resetting state.");
+               ResetState();
+            }
+         }
+
          g_h1BarsSinceRefresh = 0;
       }
    }
@@ -649,6 +692,10 @@ void WaitForPullbackAndConfirm()
       {
          g_srLevels[g_breakoutLevelIdx].used = true;
          g_state = RR_IN_POSITION;
+
+         // エントリー確定 → Pullback Zone削除 + SR線を最新状態に更新
+         DeletePullbackZone(g_breakoutLevelIdx);
+         DrawSRLevels();
 
          string confirmName = ConfirmPatternName(confirm);
          string msg = StringFormat("RoleReversal ENTRY: %s @ %s SL=%s TP=%s Pattern=%s Level=%s",

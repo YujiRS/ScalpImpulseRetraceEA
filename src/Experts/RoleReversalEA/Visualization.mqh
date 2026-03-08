@@ -210,7 +210,8 @@ void PanelDeleteAll()
 //+------------------------------------------------------------------+
 //| State名変換                                                        |
 //+------------------------------------------------------------------+
-string RRStateToString(ENUM_RR_STATE st)
+// チャート表示用: 短縮ステート名
+string RRStateToShortString(ENUM_RR_STATE st)
 {
    switch(st)
    {
@@ -340,7 +341,7 @@ void UpdateChartStatusPanel()
    if(g_state == RR_IN_POSITION) stateClr = clrLime;
    else if(g_state >= RR_WAITING_PULLBACK) stateClr = clrYellow;
    else if(g_state >= RR_BREAKOUT_DETECTED) stateClr = clrAqua;
-   PanelSetLine(r++, "State    : " + RRStateToString(g_state), stateClr);
+   PanelSetLine(r++, "State    : " + RRStateToShortString(g_state), stateClr);
 
    PanelSetLine(r++, "RoleReversalEA  " + Symbol(), clrGold);
 

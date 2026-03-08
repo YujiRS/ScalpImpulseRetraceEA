@@ -10,9 +10,9 @@ string BuildLogFileName()
 {
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
-   string runId = StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
+   string dateStr = StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
 
-   string fileName = EA_NAME + "_" + runId + "_" + Symbol() + ".tsv";
+   string fileName = EA_NAME + "_" + dateStr + "_" + Symbol() + "_R" + IntegerToString(RunId) + ".tsv";
    return fileName;
 }
 
@@ -20,9 +20,9 @@ string BuildSummaryFileName()
 {
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
-   string runId = StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
+   string dateStr = StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
 
-   string fileName = EA_NAME + "_SUMMARY_" + runId + "_" + Symbol() + ".tsv";
+   string fileName = EA_NAME + "_SUMMARY_" + dateStr + "_" + Symbol() + "_R" + IntegerToString(RunId) + ".tsv";
    return fileName;
 }
 
@@ -37,8 +37,9 @@ void LoggerInit()
    bool exists = FileIsExist(g_logFileName);
 
    // FILE_WRITE は先頭上書きになるため、READ|WRITE で開いて末尾へシークする
-   // === IMPROVEMENT === FILE_SHARE_READ追加: 外部ツールでの並行読み取りを許可
-   g_logFileHandle = FileOpen(g_logFileName, FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_SHARE_READ, '\t');
+   // FILE_SHARE_READ: 外部ツールでの並行読み取りを許可
+   // FILE_SHARE_WRITE: 複数インスタンス起動時の並行書き込みを許可
+   g_logFileHandle = FileOpen(g_logFileName, FILE_READ | FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE, '\t');
 
    if(g_logFileHandle == INVALID_HANDLE)
    {

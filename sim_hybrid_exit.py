@@ -59,6 +59,8 @@ class MarketProfile:
     exit_confirm_bars: int = 1
     # Hybrid: 21MA slope lookback for direction check
     hybrid_ma_lookback: int = 5
+    # Hybrid: TimeExit bars when using FlatRange path (0 = use same as time_exit_bars)
+    hybrid_time_exit_bars: int = 0
 
 PROFILES = {
     Market.GOLD: MarketProfile(
@@ -521,8 +523,10 @@ def sim_hybrid_exit(
                 reason = "StructBreak" + ("+FR" if use_flatrange else "+Conv")
                 return ExitResult(i, c, reason, pnl, position_bars)
 
-        # ── P2: TimeExit (always active) ──
-        if position_bars >= profile.time_exit_bars:
+        # ── P2: TimeExit (extended when FlatRange path is active) ──
+        te_bars = (profile.hybrid_time_exit_bars if use_flatrange and profile.hybrid_time_exit_bars > 0
+                   else profile.time_exit_bars)
+        if position_bars >= te_bars:
             pnl = ((c - pos.entry_price) if is_long
                    else (pos.entry_price - c)) / pt
             if pnl <= 0:
@@ -922,6 +926,8 @@ def main():
                         help="Path to position log CSV (optional)")
     parser.add_argument("--output-csv", default=None,
                         help="Save per-position results to CSV")
+    parser.add_argument("--hybrid-time-exit-bars", type=int, default=30,
+                        help="TimeExit bars for Hybrid FlatRange path (default: 30)")
     args = parser.parse_args()
 
     # Load data
@@ -934,7 +940,9 @@ def main():
     profile = PROFILES[market]
     if args.spread_override is not None:
         profile.spread_default = args.spread_override
-    print(f"  Market: {market.value}  point={profile.point}")
+    profile.hybrid_time_exit_bars = args.hybrid_time_exit_bars
+    print(f"  Market: {market.value}  point={profile.point}  "
+          f"hybrid_time_exit={profile.hybrid_time_exit_bars}")
 
     # Positions
     if args.position_csv:

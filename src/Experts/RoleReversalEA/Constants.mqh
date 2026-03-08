@@ -38,8 +38,8 @@ enum ENUM_CONFIRM_PATTERN
 //--- Lot Mode
 enum ENUM_RR_LOT_MODE
 {
-   RR_LOT_FIXED = 0,               // 固定ロット
-   RR_LOT_RISK_PERCENT = 1,        // リスク%
+   RR_LOT_FIXED = 0,               // FIXED
+   RR_LOT_RISK_PERCENT = 1,        // RISK_PERCENT
 };
 
 //--- Log Level

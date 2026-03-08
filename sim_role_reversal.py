@@ -67,7 +67,15 @@ TRADE_HOUR_END = 21
 
 # -- Position Management
 USE_FIXED_RR_TP = True          # True: fixed R:R TP, False: next H1 level TP
-TRAIL_AFTER_1R = False          # Trail stop to breakeven after 1R profit
+ENABLE_BREAKEVEN = True         # Enable breakeven (SL → Entry) at threshold
+BE_RR_THRESHOLD = 1.0           # R:R threshold to trigger breakeven
+
+# -- Market-specific breakeven defaults
+MARKET_BREAKEVEN_DEFAULTS = {
+    "GOLD":   {"enable": True,  "threshold": 1.5},
+    "FX":     {"enable": False, "threshold": 1.0},
+    "CRYPTO": {"enable": False, "threshold": 1.0},
+}
 
 # -- Market-specific
 POINT_VALUE = 0.01              # GOLD: 0.01, FX: 0.001 or 0.01
@@ -498,6 +506,8 @@ class Trade:
     exit_reason: str = ""
     pnl_pips: float = 0.0
     rr_achieved: float = 0.0
+    original_sl: float = 0.0        # SL before breakeven
+    breakeven_triggered: bool = False
 
 
 def calculate_sl_tp(m5: pd.DataFrame, signal_idx: int, direction: str,
@@ -673,14 +683,28 @@ def run_simulation(m1_path: str, market: str = "GOLD") -> List[Trade]:
         # -- Manage open position
         if state.in_position and state.current_trade:
             trade = state.current_trade
+            # Use original_sl for R:R calculation (immutable reference)
+            ref_sl = trade.original_sl if trade.original_sl != 0 else trade.sl
+
+            # -- Breakeven check (before SL/TP evaluation)
+            if ENABLE_BREAKEVEN and not trade.breakeven_triggered:
+                risk = abs(trade.entry_price - ref_sl)
+                if trade.direction == "long":
+                    reward = bar["high"] - trade.entry_price  # Intra-bar peak
+                else:
+                    reward = trade.entry_price - bar["low"]
+                if risk > 0 and reward > 0 and (reward / risk) >= BE_RR_THRESHOLD:
+                    trade.breakeven_triggered = True
+                    trade.sl = trade.entry_price
+
             if trade.direction == "long":
                 # Check SL hit
                 if bar["low"] <= trade.sl:
                     trade.exit_time = bar_time
                     trade.exit_price = trade.sl
-                    trade.exit_reason = "SL"
+                    trade.exit_reason = "BE" if trade.breakeven_triggered and trade.sl == trade.entry_price else "SL"
                     trade.pnl_pips = (trade.sl - trade.entry_price) / POINT_VALUE
-                    sl_dist = trade.entry_price - trade.sl
+                    sl_dist = trade.entry_price - ref_sl
                     trade.rr_achieved = (trade.sl - trade.entry_price) / sl_dist if sl_dist > 0 else 0
                     trades.append(trade)
                     state.in_position = False
@@ -693,7 +717,7 @@ def run_simulation(m1_path: str, market: str = "GOLD") -> List[Trade]:
                     trade.exit_price = trade.tp
                     trade.exit_reason = "TP"
                     trade.pnl_pips = (trade.tp - trade.entry_price) / POINT_VALUE
-                    sl_dist = trade.entry_price - trade.sl
+                    sl_dist = trade.entry_price - ref_sl
                     trade.rr_achieved = (trade.tp - trade.entry_price) / sl_dist if sl_dist > 0 else 0
                     trades.append(trade)
                     state.in_position = False
@@ -704,9 +728,9 @@ def run_simulation(m1_path: str, market: str = "GOLD") -> List[Trade]:
                 if bar["high"] >= trade.sl:
                     trade.exit_time = bar_time
                     trade.exit_price = trade.sl
-                    trade.exit_reason = "SL"
+                    trade.exit_reason = "BE" if trade.breakeven_triggered and trade.sl == trade.entry_price else "SL"
                     trade.pnl_pips = (trade.entry_price - trade.sl) / POINT_VALUE
-                    sl_dist = trade.sl - trade.entry_price
+                    sl_dist = ref_sl - trade.entry_price
                     trade.rr_achieved = (trade.entry_price - trade.sl) / sl_dist if sl_dist > 0 else 0
                     trades.append(trade)
                     state.in_position = False
@@ -718,7 +742,7 @@ def run_simulation(m1_path: str, market: str = "GOLD") -> List[Trade]:
                     trade.exit_price = trade.tp
                     trade.exit_reason = "TP"
                     trade.pnl_pips = (trade.entry_price - trade.tp) / POINT_VALUE
-                    sl_dist = trade.sl - trade.entry_price
+                    sl_dist = ref_sl - trade.entry_price
                     trade.rr_achieved = (trade.entry_price - trade.tp) / sl_dist if sl_dist > 0 else 0
                     trades.append(trade)
                     state.in_position = False
@@ -892,6 +916,7 @@ def run_simulation(m1_path: str, market: str = "GOLD") -> List[Trade]:
                 sr_level=lvl.price,
                 signal_candle_idx=i,
                 confirm_pattern=confirm,
+                original_sl=sl,
             )
             state.in_position = True
             state.current_trade = trade
@@ -962,6 +987,22 @@ def run_simulation(m1_path: str, market: str = "GOLD") -> List[Trade]:
     print(f"{'Avg R:R (wins)':<30s} {avg_rr:>15.2f}")
     print(f"{'Max Drawdown (pips)':<30s} {max_dd_pips:>15.1f}")
 
+    # Breakeven stats
+    be_trades = [t for t in closed_trades if t.breakeven_triggered]
+    be_exits = [t for t in closed_trades if t.exit_reason == "BE"]
+    if ENABLE_BREAKEVEN:
+        print(f"\n{'--- Breakeven Stats ---':<30s}")
+        print(f"{'BE Triggered':<30s} {len(be_trades):>15d}")
+        print(f"{'BE Exit (SL=Entry)':<30s} {len(be_exits):>15d}")
+        be_then_tp = [t for t in be_trades if t.exit_reason == "TP"]
+        print(f"{'BE → TP':<30s} {len(be_then_tp):>15d}")
+        # Losses saved by BE (trades that would have hit original SL)
+        be_saved_pnl = sum(
+            abs(t.entry_price - t.original_sl) / POINT_VALUE
+            for t in be_exits
+        )
+        print(f"{'Loss Saved by BE (pips)':<30s} {be_saved_pnl:>15.1f}")
+
     # Confirm pattern breakdown
     pattern_stats = {}
     for t in closed_trades:
@@ -1002,6 +1043,7 @@ def run_simulation(m1_path: str, market: str = "GOLD") -> List[Trade]:
             "entry_time": t.entry_time,
             "direction": t.direction,
             "entry_price": t.entry_price,
+            "original_sl": t.original_sl,
             "sl": t.sl,
             "tp": t.tp,
             "sr_level": t.sr_level,
@@ -1011,6 +1053,7 @@ def run_simulation(m1_path: str, market: str = "GOLD") -> List[Trade]:
             "pnl_pips": t.pnl_pips,
             "rr_achieved": t.rr_achieved,
             "confirm_pattern": t.confirm_pattern,
+            "breakeven_triggered": t.breakeven_triggered,
         })
     results_df = pd.DataFrame(results_data)
     out_path = os.path.join("sim_dat", f"sim_results_role_reversal_{market.lower()}.csv")
@@ -1129,14 +1172,29 @@ if __name__ == "__main__":
                         help="Run parameter sweep")
     parser.add_argument("--data", type=str, default=None,
                         help="Path to M1 CSV data file")
+    parser.add_argument("--no-breakeven", action="store_true",
+                        help="Disable breakeven logic (baseline)")
+    parser.add_argument("--be-threshold", type=float, default=None,
+                        help="Breakeven R:R threshold (overrides BE_RR_THRESHOLD)")
     args = parser.parse_args()
+
+    # Apply market-specific breakeven defaults, then CLI overrides
+    be_defaults = MARKET_BREAKEVEN_DEFAULTS.get(args.market, {})
+    ENABLE_BREAKEVEN = be_defaults.get("enable", True)
+    BE_RR_THRESHOLD = be_defaults.get("threshold", 1.0)
+
+    if args.no_breakeven:
+        ENABLE_BREAKEVEN = False
+    if args.be_threshold is not None:
+        ENABLE_BREAKEVEN = True
+        BE_RR_THRESHOLD = args.be_threshold
 
     # Default data paths
     data_paths = {
         "GOLD": os.path.join("sim_dat",
                              "GOLD#_M1_202509010100_202511282139.csv"),
         "FX": os.path.join("sim_dat",
-                           "USDJPY#_M1_202602020000_202602160000.csv"),
+                           "USDJPY#_M1_202512010000_202602270000.csv"),
         "CRYPTO": os.path.join("sim_dat",
                                "BTCUSD#_M1_202512010000_202602270000.csv"),
     }

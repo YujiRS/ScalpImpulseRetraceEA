@@ -279,8 +279,9 @@ void ManagePosition()
    }
 
    // =====================================================================
-   // 建値移動: RR >= 1.0で建値（維持）— 両モード共通
+   // 建値移動: RR >= BreakevenRR で建値（維持）— 両モード共通
    // =====================================================================
+   if(EnableBreakeven)
    {
       double risk = MathAbs(openPrice - g_sl);
       double reward = 0;
@@ -296,7 +297,7 @@ void ManagePosition()
          reward = openPrice - currentPrice;
       }
 
-      if(risk > 0 && (reward / risk) >= 1.0)
+      if(risk > 0 && (reward / risk) >= BreakevenRR)
       {
          if(g_impulseDir == DIR_LONG && currentSL < openPrice)
             ModifySL(openPrice);

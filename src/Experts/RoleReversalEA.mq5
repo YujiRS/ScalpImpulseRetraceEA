@@ -29,6 +29,10 @@ input double            RiskPercent            = 1.0;            // Risk % (of e
 input ENUM_RR_LOG_LEVEL LogLevel               = RR_LOG_NORMAL; // Log Level
 input int               MagicOffset            = 0;              // Magic Number Offset
 
+// === G10: Notification ===
+input bool              EnableAlert            = true;           // Alert on entry
+input bool              EnablePush             = true;           // Push notification on entry
+
 // === G2: S/R Detection ===
 input int               SR_SwingLookback       = 7;              // H1 Swing Lookback (bars each side)
 input double            SR_MergeTolerance      = 0.5;            // Merge Tolerance (ATR fraction)
@@ -70,10 +74,6 @@ input int               TradeHourEnd           = 21;             // Trading End 
 // === G9: M15 Trend Filter ===
 input bool              M15_TrendFilter        = true;           // Enable M15 Trend Filter
 input int               M15_EMA_Period         = 50;             // M15 EMA Period
-
-// === G10: Notification ===
-input bool              EnableAlert            = true;           // Alert on entry
-input bool              EnablePush             = false;          // Push notification on entry
 
 // === G11: Visualization ===
 input bool              EnableSRLines          = true;           // Draw S/R lines on chart

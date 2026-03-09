@@ -1042,6 +1042,16 @@ double CalculateLot(double entryPrice, double slPrice)
 
    double lot = riskAmount / (slDistance / tickSize * tickValue);
 
+   Print("[RiskCalc] equity=", equity,
+         " RiskPercent=", RiskPercent,
+         " riskAmount=", riskAmount,
+         " entry=", entryPrice,
+         " sl=", slPrice,
+         " slDistance=", slDistance,
+         " tickValue=", tickValue,
+         " tickSize=", tickSize,
+         " rawLot=", lot);
+
    // Normalize to symbol constraints
    double lotMin = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
    double lotMax = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
@@ -1064,6 +1074,8 @@ double CalculateLot(double entryPrice, double slPrice)
    }
 
    lot = MathFloor(lot / lotStep) * lotStep;
+
+   Print("[RiskCalc] finalLot=", lot, " minLot=", lotMin, " lotStep=", lotStep);
 
    return NormalizeDouble(lot, 2);
 }

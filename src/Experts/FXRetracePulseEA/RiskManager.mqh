@@ -139,6 +139,18 @@ double CalcRiskPercentLot(double entryPrice, double slPrice)
 
    double rawLot  = riskAmount / (slDistPts * pointValue);
 
+   Print("[RiskCalc] equity=", AccountInfoDouble(ACCOUNT_EQUITY),
+         " RiskPercent=", RiskPercent,
+         " riskAmount=", riskAmount,
+         " entry=", entryPrice,
+         " sl=", slPrice,
+         " slDistPts=", slDistPts,
+         " _Point=", _Point,
+         " tickValue=", tickValue,
+         " tickSize=", tickSize,
+         " pointValue=", pointValue,
+         " rawLot=", rawLot);
+
    double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
@@ -160,6 +172,8 @@ double CalcRiskPercentLot(double entryPrice, double slPrice)
    }
 
    rawLot = MathFloor(rawLot / lotStep) * lotStep;
+
+   Print("[RiskCalc] finalLot=", rawLot, " minLot=", minLot, " lotStep=", lotStep);
 
    return NormalizeDouble(rawLot, 8);
 }

@@ -338,6 +338,23 @@
 
 ---
 
+### [ADR-020] Hybrid Exit（FlatRange分岐）をCRYPTOに実装しない判断
+
+- **日付:** 2026-03-08
+- **状況:** GoldBreakoutFilterEA / FXRetracePulseEA に実装した Hybrid Exit（21MA方向一致時はFlatRange exit、不一致時は従来EMAクロス exit）を CryptoImpulseRetraceEA にも適用するか
+- **決定:** CRYPTOには実装しない。EMAクロス決済のみを維持
+- **理由:** sim_hybrid_exit.py による3市場シミュレーション比較で、CRYPTOでは Hybrid Exit が大幅逆効果と判明
+  - GOLD: Conventional -995 pips → Hybrid +2,443 pips（**+3,438 pips 改善**）
+  - FX: Conventional -1,766 pips → Hybrid +5,266 pips（**+7,032 pips 改善**）
+  - CRYPTO: Conventional -18,388 pips → Hybrid -54,102 pips（**-35,714 pips 悪化**）
+  - CRYPTOではFlatRange経由のTimeExit+FRが多発し、従来のEMAクロスより早期に不利な価格で決済されるケースが大半を占めた
+  - 根本原因: CRYPTOのボラティリティが高く、MAフラット検出が「本当のレンジ」ではなく「一時的な停滞」を拾ってしまい、その後の急変動で損失拡大
+- **没案:** CRYPTO含む全3市場に統一実装 → シミュレーションで明確に否定
+- **参照コミット:** `997d18d`（simulator追加）, `4cc63ea`（3市場sim結果）, `c227942`（GOLD実装）, `5b8bdd2`（FX実装）
+- **影響:** **固定**（CRYPTOの値動き特性が変わらない限り再検証不要）。CRYPTOのExit優先順位は従来通り: 構造破綻 > 時間撤退 > EMAクロス
+
+---
+
 ## 未記録の意思決定（コードから推定されるが根拠不明）
 
 以下はコードや仕様書から存在が確認できるが、「なぜそうしたか」の記録が見つからなかったもの。

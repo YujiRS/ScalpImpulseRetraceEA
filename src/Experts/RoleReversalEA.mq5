@@ -991,8 +991,8 @@ bool ExecuteEntry(int direction, double sl, double tp, ENUM_CONFIRM_PATTERN conf
                     SymbolInfoDouble(Symbol(), SYMBOL_BID);
    request.volume = CalculateLot(request.price, sl);
 
-   //--- FixedLotモード: 証拠金維持率チェック
-   if(LotMode == RR_LOT_FIXED && MinMarginLevel > 0)
+   //--- 証拠金維持率チェック（全LotMode共通）
+   if(MinMarginLevel > 0)
    {
       double equity     = AccountInfoDouble(ACCOUNT_EQUITY);
       double usedMargin = AccountInfoDouble(ACCOUNT_MARGIN);

@@ -122,8 +122,8 @@ bool ExecuteEntry()
                        ? CalcRiskPercentLot(price, g_sl)
                        : FixedLot;
 
-   //--- FixedLotモード: 証拠金維持率チェック
-   if(LotMode != LOT_MODE_RISK_PERCENT && MinMarginLevel > 0)
+   //--- 証拠金維持率チェック（全LotMode共通）
+   if(MinMarginLevel > 0)
    {
       double equity     = AccountInfoDouble(ACCOUNT_EQUITY);
       double usedMargin = AccountInfoDouble(ACCOUNT_MARGIN);

@@ -153,8 +153,8 @@ bool ExecuteEntry()
    request.sl        = g_sl;
    request.tp        = g_tp;
    request.deviation = (ulong)g_profile.maxSlippagePts;
-   request.magic        = 20260201;
-   request.comment      = EA_NAME + " " + g_tradeUUID;
+   request.magic        = 0;
+   request.comment      = EA_NAME + "/" + FlatFilterModeToString(FlatFilterMode) + (g_instanceTag != "" ? "[" + g_instanceTag + "]" : "") + " " + g_tradeUUID;
    request.type_filling = GetFillingMode();
 
    if(!OrderSend(request, result))

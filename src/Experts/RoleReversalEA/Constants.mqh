@@ -75,7 +75,4 @@ struct TradeRecord
    ENUM_CONFIRM_PATTERN confirm;
 };
 
-//--- Magic number base
-#define RR_MAGIC_BASE 20260307
-
 #endif

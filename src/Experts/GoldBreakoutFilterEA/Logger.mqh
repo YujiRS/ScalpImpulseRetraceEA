@@ -328,7 +328,7 @@ string GenerateTradeUUID()
    string ts = StringFormat("%04d%02d%02d%02d%02d%02d",
                             dt.year, dt.mon, dt.day, dt.hour, dt.min, dt.sec);
    string runStr = StringFormat("%02d", g_autoRunId);
-   return ts + "_" + Symbol() + "_" + runStr;
+   return ts + "_" + runStr;
 }
 
 //+------------------------------------------------------------------+

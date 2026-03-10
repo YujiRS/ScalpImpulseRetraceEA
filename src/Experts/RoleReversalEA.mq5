@@ -4,7 +4,7 @@
 //| H1 S/R breakout → M5 pullback → EMA25+Confirm → Entry            |
 //| Independent EA (not part of Impulse→Retrace family)               |
 //+------------------------------------------------------------------+
-#property copyright "RoleReversalEA"
+#property copyright "RR"
 #property link      ""
 #property version   "1.00"
 #property strict
@@ -28,7 +28,7 @@ input double            FixedLot               = 0.01;          // Fixed Lot
 input double            RiskPercent            = 1.0;            // Risk % (of equity)
 input double            MinMarginLevel         = 1500;           // MinMarginLevel(%) min margin level after entry
 input ENUM_RR_LOG_LEVEL LogLevel               = RR_LOG_NORMAL; // Log Level
-input int               MagicOffset            = 0;              // Magic Number Offset
+input string            InstanceTag            = "";             // InstanceTag(コメント欄に付与、例:"Aggressive")
 input double            LongDisableAbove       = 0;              // LongDisableAbove(Bid≧この値でLong禁止, 0=制御なし)
 input double            ShortDisableBelow      = 0;              // ShortDisableBelow(Bid≦この値でShort禁止, 0=制御なし)
 
@@ -86,7 +86,7 @@ input bool              EnableStatusPanel      = true;           // On-chart sta
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
 ENUM_RR_STATE g_state = RR_IDLE;
-int           g_magic = RR_MAGIC_BASE;
+int           g_magic = 0;
 
 // Indicator handles
 int           g_emaM5Handle = INVALID_HANDLE;
@@ -120,7 +120,7 @@ double        g_posTP = 0;
 //+------------------------------------------------------------------+
 string RR_GVKey(string varName)
 {
-   return "RR_" + Symbol() + "_" + IntegerToString(g_magic) + "_" + varName;
+   return "RR_" + Symbol() + "_" + varName;
 }
 
 //+------------------------------------------------------------------+
@@ -291,7 +291,7 @@ void ClearSavedState()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   g_magic = RR_MAGIC_BASE + MagicOffset;
+   g_magic = 0;
 
    // Create indicator handles
    g_emaM5Handle = iMA(Symbol(), PERIOD_M5, EMA_Period, 0, MODE_EMA, PRICE_CLOSE);
@@ -323,7 +323,7 @@ int OnInit()
    // ファイルログ初期化
    RR_LoggerInit();
 
-   Print("RoleReversalEA v1.0 initialized. S/R levels: ", g_srCount, " Magic: ", g_magic);
+   Print("RoleReversalEA v1.0 initialized. S/R levels: ", g_srCount);
    for(int i = 0; i < g_srCount; i++)
    {
       Print("  ", (g_srLevels[i].is_resistance ? "RES" : "SUP"),
@@ -1019,7 +1019,7 @@ bool ExecuteEntry(int direction, double sl, double tp, ENUM_CONFIRM_PATTERN conf
    request.tp = NormalizeDouble(tp, _Digits);
    request.deviation = 20;
    request.magic = g_magic;
-   request.comment = "RR_" + ConfirmPatternName(confirm);
+   request.comment = "RR" + (InstanceTag != "" ? "[" + InstanceTag + "]" : "") + "_" + ConfirmPatternName(confirm);
 
    // Filling mode
    long fillMode = SymbolInfoInteger(Symbol(), SYMBOL_FILLING_MODE);

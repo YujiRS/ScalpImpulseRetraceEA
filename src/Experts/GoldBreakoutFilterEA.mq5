@@ -191,6 +191,7 @@ double            g_maxSpreadPts       = 0.0;
 
 // TradeUUID
 string            g_tradeUUID          = "";
+string            g_instanceTag        = "";
 
 // Visualization object names
 string            g_fibObjName         = "";
@@ -789,6 +790,7 @@ void Process_COOLDOWN()
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   g_instanceTag = InstanceTag;
    InitMarketProfile();
 
    if(DumpMarketProfile)

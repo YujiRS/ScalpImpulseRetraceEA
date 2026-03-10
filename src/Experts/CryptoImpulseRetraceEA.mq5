@@ -82,6 +82,8 @@ input double            MinRR_EntryGate_CRYPTO  = 0.5;
 input double            MinRangeCostMult_CRYPTO = 2.0;
 input double            SLATRMult_CRYPTO        = 0.7;
 input double            TPExtRatio_CRYPTO       = 0.382;
+// --- Insurance TP (PC断時の安全ネット) ---
+input double            InsuranceTP_ATRMult_CRYPTO = 3.0;        // 保険TP=Entry±ATR(M1)*this (0=無効)
 
 // 【G4：検証・デバッグ】
 input bool              DumpStateOnChange      = true;

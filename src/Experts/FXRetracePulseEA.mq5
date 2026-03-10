@@ -84,6 +84,8 @@ input double            MinRangeCostMult_FX     = 2.5;           // MinRangeCost
 input double            SLATRMult_FX            = 0.7;           // SLATRMult_FX(SL=ImpulseStart±ATR*this)
 // --- TP Extension ---
 input double            TPExtRatio_FX           = 0.382;         // TPExtRatio_FX(0=Fib100そのまま)
+// --- Insurance TP (PC断時の安全ネット) ---
+input double            InsuranceTP_ATRMult_FX  = 3.5;           // 保険TP=Entry±ATR(M1)*this (0=無効)
 
 // 【G3：戦略（基本触らない）】
 input bool              OptionalBand38         = false;          // OptionalBand38

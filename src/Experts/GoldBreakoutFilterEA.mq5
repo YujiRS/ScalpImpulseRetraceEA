@@ -109,6 +109,8 @@ input double            MinRangeCostMult_GOLD   = 2.5;           // MinRangeCost
 input double            SLATRMult_GOLD          = 0.8;           // SLATRMult_GOLD(SL=ImpulseStart±ATR*this)
 // --- TP Extension ---
 input double            TPExtRatio_GOLD         = 0.382;         // TPExtRatio_GOLD(0=Fib100そのまま)
+// --- Insurance TP (PC断時の安全ネット) ---
+input double            InsuranceTP_ATRMult_GOLD = 4.0;          // 保険TP=Entry±ATR(M1)*this (0=無効)
 
 // 【G3：戦略（基本触らない）】
 input bool              ConfirmModeOverride    = false;          // ConfirmModeOverride

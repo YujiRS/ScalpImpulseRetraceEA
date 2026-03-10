@@ -113,7 +113,7 @@ double GetExtendedTP()
 }
 
 //+------------------------------------------------------------------+
-//| SL/TP計算: サーバーTP=0（EMAクロス決済）                             |
+//| SL/TP計算: 保険TP対応（動的Exit が先に発動、PC断時の安全ネット）       |
 //+------------------------------------------------------------------+
 void CalculateSLTP(double entryPrice)
 {
@@ -125,7 +125,16 @@ void CalculateSLTP(double entryPrice)
    else
       g_sl = g_impulseStart + atr * mult;
 
-   g_tp = 0;
+   // 保険TP: 0より大きい場合のみサーバーTPを設定
+   if(InsuranceTP_ATRMult_GOLD > 0)
+   {
+      if(g_impulseDir == DIR_LONG)
+         g_tp = entryPrice + atr * InsuranceTP_ATRMult_GOLD;
+      else
+         g_tp = entryPrice - atr * InsuranceTP_ATRMult_GOLD;
+   }
+   else
+      g_tp = 0;
 }
 
 void PreviewSLTP(double entryPrice, double &outSL, double &outTP)

@@ -121,129 +121,127 @@ void DumpImpulseSummary()
    string fileName = BuildSummaryFileName();
    bool headerNeeded = !FileIsExist(fileName);
 
-   int handle = FileOpen(fileName, FILE_READ | FILE_WRITE | FILE_TXT | FILE_SHARE_WRITE | FILE_SHARE_READ, '\t');
+   int handle = FileOpen(fileName, FILE_READ | FILE_WRITE | FILE_TXT | FILE_SHARE_WRITE | FILE_SHARE_READ);
    if(handle == INVALID_HANDLE) return;
 
    if(headerNeeded)
    {
-      FileWrite(handle,
-         "Time", "Symbol", "MarketMode", "TradeUUID",
-         "RangePts", "BandWidthPts", "LeaveDistancePts", "SpreadBasePts",
-         "FreezeCancelCount",
-         "Touch1Count", "LeaveCount", "Touch2Count", "ConfirmCount",
-         "RiskGatePass", "Touch2Reached", "ConfirmReached", "EntryGatePass",
-         "RR_Actual", "RR_Min",
-         "RangeCostMult_Actual", "RangeCostMult_Min",
-         "FinalState", "RejectStage",
-
-         // --- MA Confluence（列順はDOC-LOG 3.3が正典：この位置固定）
-         "MA_ConfluenceCount", "MA_InBand_List", "MA_InBand_FibPct",
-         "MA_TightHitCount", "MA_TightHit_List",
-         "MA_NearBand_List", "MA_NearestDistance",
-         "MA_DirectionAligned", "MA_Values", "MA_Eval_Price",
-
-         // --- STRUCTURE_BREAK（後方互換：末尾追加）
-         "StructBreakReason", "StructBreakPriority", "StructBreakRefLevel",
-         "StructBreakRefPrice", "StructBreakAtPrice", "StructBreakDistPts", "StructBreakBarShift",
-         "StructBreakSide", "StructBreakAtKind", "StructBreakWickCross", "StructBreakWickDistPts",
-
-         // --- TrendFilter / ReversalGuard（後方互換：末尾追加）
-         "TrendFilterEnable", "TrendTF", "TrendMethod", "TrendDir",
-         "TrendSlope", "TrendSlopeMin", "TrendATRFloor", "TrendAligned",
-         "ReversalGuardEnable", "ReversalTF", "ReversalGuardTriggered", "ReversalReason",
-
-         // --- EMA Cross Filter / Impulse Exceed Filter（後方互換：末尾追加）
-         "EMACrossFilterEnable", "EMACrossFastVal", "EMACrossSlowVal",
-         "EMACrossDir", "EMACrossAligned",
-         "ImpulseExceedEnable", "ImpulseRangeATR", "ImpulseExceedMax", "ImpulseExceedTriggered"
-      );
+      string header =
+         "Time\tSymbol\tMarketMode\tTradeUUID\t"
+         "RangePts\tBandWidthPts\tLeaveDistancePts\tSpreadBasePts\t"
+         "FreezeCancelCount\t"
+         "Touch1Count\tLeaveCount\tTouch2Count\tConfirmCount\t"
+         "RiskGatePass\tTouch2Reached\tConfirmReached\tEntryGatePass\t"
+         "RR_Actual\tRR_Min\t"
+         "RangeCostMult_Actual\tRangeCostMult_Min\t"
+         "FinalState\tRejectStage\t"
+         // --- MA Confluence
+         "MA_ConfluenceCount\tMA_InBand_List\tMA_InBand_FibPct\t"
+         "MA_TightHitCount\tMA_TightHit_List\t"
+         "MA_NearBand_List\tMA_NearestDistance\t"
+         "MA_DirectionAligned\tMA_Values\tMA_Eval_Price\t"
+         // --- STRUCTURE_BREAK
+         "StructBreakReason\tStructBreakPriority\tStructBreakRefLevel\t"
+         "StructBreakRefPrice\tStructBreakAtPrice\tStructBreakDistPts\tStructBreakBarShift\t"
+         "StructBreakSide\tStructBreakAtKind\tStructBreakWickCross\tStructBreakWickDistPts\t"
+         // --- TrendFilter / ReversalGuard
+         "TrendFilterEnable\tTrendTF\tTrendMethod\tTrendDir\t"
+         "TrendSlope\tTrendSlopeMin\tTrendATRFloor\tTrendAligned\t"
+         "ReversalGuardEnable\tReversalTF\tReversalGuardTriggered\tReversalReason\t"
+         // --- EMA Cross Filter / Impulse Exceed Filter
+         "EMACrossFilterEnable\tEMACrossFastVal\tEMACrossSlowVal\t"
+         "EMACrossDir\tEMACrossAligned\t"
+         "ImpulseExceedEnable\tImpulseRangeATR\tImpulseExceedMax\tImpulseExceedTriggered";
+      FileWriteString(handle, header + "\n");
    }
 
    FileSeek(handle, 0, SEEK_END);
 
-   FileWrite(handle,
-      TimeToString(g_stats.StartTime, TIME_DATE|TIME_SECONDS),
-      Symbol(),
-      "GOLD",
-      g_stats.TradeUUID,
+   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
 
-      g_stats.RangePts,
-      g_stats.BandWidthPts,
-      g_stats.LeaveDistancePts,
-      g_stats.SpreadBasePts,
+   string line =
+      TimeToString(g_stats.StartTime, TIME_DATE|TIME_SECONDS) + "\t" +
+      Symbol() + "\t" +
+      "GOLD" + "\t" +
+      g_stats.TradeUUID + "\t" +
 
-      g_stats.FreezeCancelCount,
+      DoubleToString(g_stats.RangePts, 1) + "\t" +
+      DoubleToString(g_stats.BandWidthPts, 1) + "\t" +
+      DoubleToString(g_stats.LeaveDistancePts, 1) + "\t" +
+      DoubleToString(g_stats.SpreadBasePts, 1) + "\t" +
 
-      g_stats.Touch1Count,
-      g_stats.LeaveCount,
-      g_stats.Touch2Count,
-      g_stats.ConfirmCount,
+      IntegerToString(g_stats.FreezeCancelCount) + "\t" +
 
-      g_stats.RiskGatePass ? 1 : 0,
-      g_stats.Touch2Reached ? 1 : 0,
-      g_stats.ConfirmReached ? 1 : 0,
-      g_stats.EntryGatePass ? 1 : 0,
+      IntegerToString(g_stats.Touch1Count) + "\t" +
+      IntegerToString(g_stats.LeaveCount) + "\t" +
+      IntegerToString(g_stats.Touch2Count) + "\t" +
+      IntegerToString(g_stats.ConfirmCount) + "\t" +
 
-      g_stats.RR_Actual,
-      g_stats.RR_Min,
+      IntegerToString(g_stats.RiskGatePass ? 1 : 0) + "\t" +
+      IntegerToString(g_stats.Touch2Reached ? 1 : 0) + "\t" +
+      IntegerToString(g_stats.ConfirmReached ? 1 : 0) + "\t" +
+      IntegerToString(g_stats.EntryGatePass ? 1 : 0) + "\t" +
 
-      g_stats.RangeCostMult_Actual,
-      g_stats.RangeCostMult_Min,
+      DoubleToString(g_stats.RR_Actual, 2) + "\t" +
+      DoubleToString(g_stats.RR_Min, 2) + "\t" +
 
-      // ★FIX: FinalState は string のため StateToString() を通さずそのまま出力
-      g_stats.FinalState,
-      g_stats.RejectStage,
+      DoubleToString(g_stats.RangeCostMult_Actual, 2) + "\t" +
+      DoubleToString(g_stats.RangeCostMult_Min, 2) + "\t" +
+
+      g_stats.FinalState + "\t" +
+      g_stats.RejectStage + "\t" +
 
       // --- MA Confluence
-      (g_stats.MA_ConfluenceCount >= 0) ? IntegerToString(g_stats.MA_ConfluenceCount) : "",
-      g_stats.MA_InBand_List,
-      g_stats.MA_InBand_FibPct,
-      (g_stats.MA_TightHitCount >= 0) ? IntegerToString(g_stats.MA_TightHitCount) : "",
-      g_stats.MA_TightHit_List,
-      g_stats.MA_NearBand_List,
-      g_stats.MA_NearestDistance,
-      (g_stats.MA_DirectionAligned >= 0) ? IntegerToString(g_stats.MA_DirectionAligned) : "",
-      g_stats.MA_Values,
-      g_stats.MA_Eval_Price,
+      ((g_stats.MA_ConfluenceCount >= 0) ? IntegerToString(g_stats.MA_ConfluenceCount) : "") + "\t" +
+      g_stats.MA_InBand_List + "\t" +
+      g_stats.MA_InBand_FibPct + "\t" +
+      ((g_stats.MA_TightHitCount >= 0) ? IntegerToString(g_stats.MA_TightHitCount) : "") + "\t" +
+      g_stats.MA_TightHit_List + "\t" +
+      g_stats.MA_NearBand_List + "\t" +
+      DoubleToString(g_stats.MA_NearestDistance, 1) + "\t" +
+      ((g_stats.MA_DirectionAligned >= 0) ? IntegerToString(g_stats.MA_DirectionAligned) : "") + "\t" +
+      g_stats.MA_Values + "\t" +
+      DoubleToString(g_stats.MA_Eval_Price, digits) + "\t" +
 
       // --- STRUCTURE_BREAK
-      g_stats.StructBreakReason,
-      g_stats.StructBreakPriority,
-      g_stats.StructBreakRefLevel,
-      g_stats.StructBreakRefPrice,
-      g_stats.StructBreakAtPrice,
-      g_stats.StructBreakDistPts,
-      g_stats.StructBreakBarShift,
-      g_stats.StructBreakSide,
-      g_stats.StructBreakAtKind,
-      g_stats.StructBreakWickCross,
-      g_stats.StructBreakWickDistPts,
+      g_stats.StructBreakReason + "\t" +
+      IntegerToString(g_stats.StructBreakPriority) + "\t" +
+      g_stats.StructBreakRefLevel + "\t" +
+      DoubleToString(g_stats.StructBreakRefPrice, digits) + "\t" +
+      DoubleToString(g_stats.StructBreakAtPrice, digits) + "\t" +
+      DoubleToString(g_stats.StructBreakDistPts, 1) + "\t" +
+      IntegerToString(g_stats.StructBreakBarShift) + "\t" +
+      g_stats.StructBreakSide + "\t" +
+      g_stats.StructBreakAtKind + "\t" +
+      IntegerToString(g_stats.StructBreakWickCross) + "\t" +
+      DoubleToString(g_stats.StructBreakWickDistPts, 1) + "\t" +
 
       // --- TrendFilter / ReversalGuard
-      (g_stats.TrendFilterEnable>=0) ? IntegerToString(g_stats.TrendFilterEnable) : "",
-      g_stats.TrendTF,
-      g_stats.TrendMethod,
-      g_stats.TrendDir,
-      g_stats.TrendSlope,
-      g_stats.TrendSlopeMin,
-      g_stats.TrendATRFloor,
-      (g_stats.TrendAligned>=0) ? IntegerToString(g_stats.TrendAligned) : "",
-      (g_stats.ReversalGuardEnable>=0) ? IntegerToString(g_stats.ReversalGuardEnable) : "",
-      g_stats.ReversalTF,
-      (g_stats.ReversalGuardTriggered>=0) ? IntegerToString(g_stats.ReversalGuardTriggered) : "",
-      g_stats.ReversalReason,
+      ((g_stats.TrendFilterEnable>=0) ? IntegerToString(g_stats.TrendFilterEnable) : "") + "\t" +
+      g_stats.TrendTF + "\t" +
+      g_stats.TrendMethod + "\t" +
+      g_stats.TrendDir + "\t" +
+      DoubleToString(g_stats.TrendSlope, 4) + "\t" +
+      DoubleToString(g_stats.TrendSlopeMin, 4) + "\t" +
+      DoubleToString(g_stats.TrendATRFloor, 1) + "\t" +
+      ((g_stats.TrendAligned>=0) ? IntegerToString(g_stats.TrendAligned) : "") + "\t" +
+      ((g_stats.ReversalGuardEnable>=0) ? IntegerToString(g_stats.ReversalGuardEnable) : "") + "\t" +
+      g_stats.ReversalTF + "\t" +
+      ((g_stats.ReversalGuardTriggered>=0) ? IntegerToString(g_stats.ReversalGuardTriggered) : "") + "\t" +
+      g_stats.ReversalReason + "\t" +
 
       // --- EMA Cross Filter / Impulse Exceed Filter
-      (g_stats.EMACrossFilterEnable>=0) ? IntegerToString(g_stats.EMACrossFilterEnable) : "",
-      g_stats.EMACrossFastVal,
-      g_stats.EMACrossSlowVal,
-      g_stats.EMACrossDir,
-      (g_stats.EMACrossAligned>=0) ? IntegerToString(g_stats.EMACrossAligned) : "",
-      (g_stats.ImpulseExceedEnable>=0) ? IntegerToString(g_stats.ImpulseExceedEnable) : "",
-      g_stats.ImpulseRangeATR,
-      g_stats.ImpulseExceedMax,
-      (g_stats.ImpulseExceedTriggered>=0) ? IntegerToString(g_stats.ImpulseExceedTriggered) : ""
-   );
+      ((g_stats.EMACrossFilterEnable>=0) ? IntegerToString(g_stats.EMACrossFilterEnable) : "") + "\t" +
+      DoubleToString(g_stats.EMACrossFastVal, digits) + "\t" +
+      DoubleToString(g_stats.EMACrossSlowVal, digits) + "\t" +
+      g_stats.EMACrossDir + "\t" +
+      ((g_stats.EMACrossAligned>=0) ? IntegerToString(g_stats.EMACrossAligned) : "") + "\t" +
+      ((g_stats.ImpulseExceedEnable>=0) ? IntegerToString(g_stats.ImpulseExceedEnable) : "") + "\t" +
+      DoubleToString(g_stats.ImpulseRangeATR, 2) + "\t" +
+      DoubleToString(g_stats.ImpulseExceedMax, 2) + "\t" +
+      ((g_stats.ImpulseExceedTriggered>=0) ? IntegerToString(g_stats.ImpulseExceedTriggered) : "");
+
+   FileWriteString(handle, line + "\n");
 
    FileClose(handle);
 }

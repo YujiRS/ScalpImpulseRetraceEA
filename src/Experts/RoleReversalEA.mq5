@@ -26,6 +26,7 @@ input bool              EnableTrading          = true;           // Enable Tradi
 input ENUM_RR_LOT_MODE  LotMode                = RR_LOT_FIXED;  // Lot Mode
 input double            FixedLot               = 0.01;          // Fixed Lot
 input double            RiskPercent            = 1.0;            // Risk % (of equity)
+input double            MinMarginLevel         = 1500;           // MinMarginLevel(%) min margin level after entry
 input ENUM_RR_LOG_LEVEL LogLevel               = RR_LOG_NORMAL; // Log Level
 input int               MagicOffset            = 0;              // Magic Number Offset
 input double            LongDisableAbove       = 0;              // LongDisableAbove(Bid≧この値でLong禁止, 0=制御なし)
@@ -989,6 +990,31 @@ bool ExecuteEntry(int direction, double sl, double tp, ENUM_CONFIRM_PATTERN conf
                     SymbolInfoDouble(Symbol(), SYMBOL_ASK) :
                     SymbolInfoDouble(Symbol(), SYMBOL_BID);
    request.volume = CalculateLot(request.price, sl);
+
+   //--- 証拠金維持率チェック（全LotMode共通）
+   if(MinMarginLevel > 0)
+   {
+      double equity     = AccountInfoDouble(ACCOUNT_EQUITY);
+      double usedMargin = AccountInfoDouble(ACCOUNT_MARGIN);
+      double addMargin  = 0;
+      if(!OrderCalcMargin(request.type, Symbol(), request.volume, request.price, addMargin)
+         || addMargin <= 0)
+      {
+         Print("[MarginCalcFailed] lot=", request.volume);
+         return false;
+      }
+      double newLevel = equity / (usedMargin + addMargin) * 100.0;
+      if(newLevel < MinMarginLevel)
+      {
+         Print("[MarginLevelInsufficient] newLevel=", DoubleToString(newLevel, 1),
+               " min=", DoubleToString(MinMarginLevel, 1),
+               " equity=", DoubleToString(equity, 2),
+               " usedMargin=", DoubleToString(usedMargin, 2),
+               " addMargin=", DoubleToString(addMargin, 2));
+         return false;
+      }
+   }
+
    request.sl = NormalizeDouble(sl, _Digits);
    request.tp = NormalizeDouble(tp, _Digits);
    request.deviation = 20;

@@ -29,6 +29,7 @@ input bool              UseMarketFallback      = true;           // UseMarketFal
 input ENUM_LOT_MODE     LotMode                = LOT_MODE_FIXED; // LotMode
 input double            FixedLot               = 0.01;           // FixedLot
 input double            RiskPercent            = 1.0;            // RiskPercent (有効証拠金の%)
+input double            MinMarginLevel         = 1500;           // MinMarginLevel(%) エントリー後維持率下限
 input ENUM_LOG_LEVEL    LogLevel               = LOG_LEVEL_NORMAL; // LogLevel
 input int               RunId                  = 0;              // RunId (0=自動連番)
 input double            LongDisableAbove       = 0;              // LongDisableAbove(Bid≧この値でLong禁止, 0=制御なし)

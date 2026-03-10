@@ -128,6 +128,33 @@ bool ExecuteEntry()
    request.volume    = (LotMode == LOT_MODE_RISK_PERCENT)
                        ? CalcRiskPercentLot(price, g_sl)
                        : FixedLot;
+
+   //--- 証拠金維持率チェック（全LotMode共通）
+   if(MinMarginLevel > 0)
+   {
+      double equity     = AccountInfoDouble(ACCOUNT_EQUITY);
+      double usedMargin = AccountInfoDouble(ACCOUNT_MARGIN);
+      double addMargin  = 0;
+      if(!OrderCalcMargin(orderType, _Symbol, request.volume, price, addMargin)
+         || addMargin <= 0)
+      {
+         WriteLog(LOG_REJECT, "", "MarginCalcFailed",
+                  "lot=" + DoubleToString(request.volume, 2));
+         return false;
+      }
+      double newLevel = equity / (usedMargin + addMargin) * 100.0;
+      if(newLevel < MinMarginLevel)
+      {
+         WriteLog(LOG_REJECT, "", "MarginLevelInsufficient",
+                  "newLevel=" + DoubleToString(newLevel, 1) +
+                  ";min=" + DoubleToString(MinMarginLevel, 1) +
+                  ";equity=" + DoubleToString(equity, 2) +
+                  ";usedMargin=" + DoubleToString(usedMargin, 2) +
+                  ";addMargin=" + DoubleToString(addMargin, 2));
+         return false;
+      }
+   }
+
    request.type      = orderType;
    request.price     = price;
    request.sl        = g_sl;

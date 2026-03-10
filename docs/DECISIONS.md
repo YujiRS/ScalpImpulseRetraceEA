@@ -355,6 +355,22 @@
 
 ---
 
+### [ADR-021] FixedLotモードにFreeMarginチェックを追加
+
+- **日付:** 2026-03-10
+- **状況:** FixedLotモードではOrderSend前にFreeMargin不足チェックがなく、ブローカー側のエラーに依存していた。RISK_PERCENTモードには既にCalcRiskPercentLot内に95%閾値チェックがあるが、FixedLotモードには同等のガードがなかった
+- **決定:** 全4EA（GOLD/FX/CRYPTO/RoleReversal）のExecuteEntry内で、FixedLotモード時にOrderCalcMarginで必要証拠金を算出し、FreeMarginを超える場合はエントリーを拒否する
+- **理由:**
+  - FixedLotは「このロットで建てたい」という明示指定であり、ロットを縮小して建てるのは意図と異なる
+  - 証拠金不足の場合は建てない（Reject）が正しい挙動
+  - ブローカーエラーに頼るとログが不明瞭になり、原因特定が困難
+- **没案:** FixedLotでも証拠金に収まるようロットを縮小する → FixedLotの意味が崩れるため不採用
+- **Reject理由:** GOLD/FX/CRYPTO は `MarginInsufficient`（WriteLog経由）、RoleReversalEA は `Print("[MarginInsufficient]")`（既存のログ方式に合わせた）
+- **RISK_PERCENTモードの95%チェックとの違い:** RISK_PERCENTモードは「リスク率から算出したロット」を証拠金内に収まるよう調整する設計。FixedLotモードは「指定ロットが建てられなければ建てない」設計。閾値も異なり、FixedLotモードはFreeMargin 100%を閾値とする（95%マージンなし）
+- **影響:** **固定**（FixedLotモードの基本的な安全策）
+
+---
+
 ## 未記録の意思決定（コードから推定されるが根拠不明）
 
 以下はコードや仕様書から存在が確認できるが、「なぜそうしたか」の記録が見つからなかったもの。

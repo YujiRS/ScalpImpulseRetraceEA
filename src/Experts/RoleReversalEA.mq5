@@ -989,6 +989,22 @@ bool ExecuteEntry(int direction, double sl, double tp, ENUM_CONFIRM_PATTERN conf
                     SymbolInfoDouble(Symbol(), SYMBOL_ASK) :
                     SymbolInfoDouble(Symbol(), SYMBOL_BID);
    request.volume = CalculateLot(request.price, sl);
+
+   //--- FixedLotモード: FreeMarginチェック
+   if(LotMode == RR_LOT_FIXED)
+   {
+      double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+      double margin = 0;
+      if(!OrderCalcMargin(request.type, Symbol(), request.volume, request.price, margin)
+         || margin > freeMargin)
+      {
+         Print("[MarginInsufficient] required=", margin,
+               " free=", freeMargin,
+               " lot=", request.volume);
+         return false;
+      }
+   }
+
    request.sl = NormalizeDouble(sl, _Digits);
    request.tp = NormalizeDouble(tp, _Digits);
    request.deviation = 20;

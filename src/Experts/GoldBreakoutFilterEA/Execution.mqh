@@ -128,6 +128,23 @@ bool ExecuteEntry()
    request.volume    = (LotMode == LOT_MODE_RISK_PERCENT)
                        ? CalcRiskPercentLot(price, g_sl)
                        : FixedLot;
+
+   //--- FixedLotモード: FreeMarginチェック
+   if(LotMode != LOT_MODE_RISK_PERCENT)
+   {
+      double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+      double margin = 0;
+      if(!OrderCalcMargin(orderType, _Symbol, request.volume, price, margin)
+         || margin > freeMargin)
+      {
+         WriteLog(LOG_REJECT, "", "MarginInsufficient",
+                  "required=" + DoubleToString(margin, 2) +
+                  ";free=" + DoubleToString(freeMargin, 2) +
+                  ";lot=" + DoubleToString(request.volume, 2));
+         return false;
+      }
+   }
+
    request.type      = orderType;
    request.price     = price;
    request.sl        = g_sl;

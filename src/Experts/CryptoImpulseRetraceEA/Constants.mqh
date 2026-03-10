@@ -208,7 +208,7 @@ struct ImpulseStats
    int        EMACrossAligned;
 
    // FlatFilter
-   int        FlatFilterEnable;
+   string     FlatFilterMode;
    string     FlatBreakoutDir;
    string     FlatMatchResult;
    int        FlatDuration;
@@ -235,7 +235,7 @@ struct ImpulseStats
       ReversalGuardTriggered = -1; ReversalReason = "";
       EMACrossFilterEnable = -1; EMACrossFastVal = 0; EMACrossSlowVal = 0;
       EMACrossDir = ""; EMACrossAligned = -1;
-      FlatFilterEnable = -1; FlatBreakoutDir = "";
+      FlatFilterMode = ""; FlatBreakoutDir = "";
       FlatMatchResult = ""; FlatDuration = 0; FlatBarsSince = 0;
    }
 };

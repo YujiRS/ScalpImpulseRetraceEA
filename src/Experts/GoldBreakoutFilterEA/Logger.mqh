@@ -145,7 +145,7 @@ void DumpImpulseSummary()
          // --- STRUCTURE_BREAK（後方互換：末尾追加）
          "StructBreakReason", "StructBreakPriority", "StructBreakRefLevel",
          "StructBreakRefPrice", "StructBreakAtPrice", "StructBreakDistPts", "StructBreakBarShift",
-         "StructBreakSide",
+         "StructBreakSide", "StructBreakAtKind", "StructBreakWickCross", "StructBreakWickDistPts",
 
          // --- TrendFilter / ReversalGuard（後方互換：末尾追加）
          "TrendFilterEnable", "TrendTF", "TrendMethod", "TrendDir",
@@ -215,6 +215,9 @@ void DumpImpulseSummary()
       g_stats.StructBreakDistPts,
       g_stats.StructBreakBarShift,
       g_stats.StructBreakSide,
+      g_stats.StructBreakAtKind,
+      g_stats.StructBreakWickCross,
+      g_stats.StructBreakWickDistPts,
 
       // --- TrendFilter / ReversalGuard
       (g_stats.TrendFilterEnable>=0) ? IntegerToString(g_stats.TrendFilterEnable) : "",

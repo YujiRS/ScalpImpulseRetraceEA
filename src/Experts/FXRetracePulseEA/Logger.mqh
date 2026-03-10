@@ -133,7 +133,7 @@ void DumpImpulseSummary()
          "MA_DirectionAligned", "MA_Values", "MA_Eval_Price",
          "StructBreakReason", "StructBreakPriority", "StructBreakRefLevel",
          "StructBreakRefPrice", "StructBreakAtPrice", "StructBreakDistPts", "StructBreakBarShift",
-         "StructBreakSide",
+         "StructBreakSide", "StructBreakAtKind", "StructBreakWickCross", "StructBreakWickDistPts",
          "TrendFilterEnable", "TrendTF", "TrendMethod", "TrendDir",
          "TrendSlope", "TrendSlopeMin", "TrendATRFloor", "TrendAligned",
          "ReversalGuardEnable", "ReversalTF", "ReversalGuardTriggered", "ReversalReason"
@@ -193,6 +193,9 @@ void DumpImpulseSummary()
       g_stats.StructBreakDistPts,
       g_stats.StructBreakBarShift,
       g_stats.StructBreakSide,
+      g_stats.StructBreakAtKind,
+      g_stats.StructBreakWickCross,
+      g_stats.StructBreakWickDistPts,
 
       (g_stats.TrendFilterEnable>=0) ? IntegerToString(g_stats.TrendFilterEnable) : "",
       g_stats.TrendTF,

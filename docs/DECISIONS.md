@@ -310,6 +310,34 @@
 
 ---
 
+### [ADR-019] S/R Target Exit（GOLD限定、M15）
+
+- **日付:** 2026-03-10
+- **状況:** EMAクロス決済ではトレンド継続時に利益を伸ばせるが、明確なS/Rレベル到達時に利確しないため機会損失が発生していた
+- **決定:**
+  - GOLD限定で、M15 Swing High/LowからS/Rレベルを検出し、最寄りの有効レベルをTPターゲットとして設定
+  - Exit優先順位: 構造破綻 > 時間撤退 > 建値移動 > **S/R Target TP** > EMAクロス/FlatRange
+  - 有効なS/Rレベルが見つからない場合はEMAクロスにフォールバック（従来動作と同一）
+  - サーバーTPとしても設定（ブローカー側で自動決済 + EA側でも確定足チェック、二重安全）
+  - SR_SkipATRMult=1.0: ATR(M15)×1.0圏内のレベルはスキップ（近すぎるレベルを除外）
+- **理由:**
+  - シミュレーション（sim_sr_target_exit_tf_compare.py）で3市場×2TF×7パラメータを比較検証
+  - GOLD M15 skip=1.0: Diff_tot=+7,230 pips（Conventional比）。SR_TP hit n=22, WR=100%
+  - GOLD H1 skip=0.25: Diff_tot=+6,915 pips。M15の方が+315 pips上回る
+  - FX: M15 skip=0.5 で+1,222 pips改善だがskip値による変動が大きく不安定
+  - CRYPTO: M15/H1ともに全skip値で悪化（逆効果）
+  - M15はGoldBreakoutFilterEAの既存MTF構成（M1主軸/M15トレンド判定）と整合する
+- **没案:**
+  - H1 S/R → M15の方が結果が良い
+  - FX/CRYPTO含む全市場 → シミュレーションで逆効果と判明
+  - S/R-Only（EMAフォールバックなし）→ S/Rが見つからない場合にExitが遅延
+- **影響:**
+  - SR_Exit_Enable / SR_SkipATRMult 等は**Input変更可能**（G1:Exit）
+  - FX/CRYPTOへの拡張は追加検証後に判断（現時点では不採用）
+  - Exit優先順位の変更により、ADR-008の優先順位表を更新
+
+---
+
 ## 未記録の意思決定（コードから推定されるが根拠不明）
 
 以下はコードや仕様書から存在が確認できるが、「なぜそうしたか」の記録が見つからなかったもの。

@@ -129,18 +129,28 @@ bool ExecuteEntry()
                        ? CalcRiskPercentLot(price, g_sl)
                        : FixedLot;
 
-   //--- FixedLotモード: FreeMarginチェック
-   if(LotMode != LOT_MODE_RISK_PERCENT)
+   //--- FixedLotモード: 証拠金維持率チェック
+   if(LotMode != LOT_MODE_RISK_PERCENT && MinMarginLevel > 0)
    {
-      double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-      double margin = 0;
-      if(!OrderCalcMargin(orderType, _Symbol, request.volume, price, margin)
-         || margin > freeMargin)
+      double equity     = AccountInfoDouble(ACCOUNT_EQUITY);
+      double usedMargin = AccountInfoDouble(ACCOUNT_MARGIN);
+      double addMargin  = 0;
+      if(!OrderCalcMargin(orderType, _Symbol, request.volume, price, addMargin)
+         || addMargin <= 0)
       {
-         WriteLog(LOG_REJECT, "", "MarginInsufficient",
-                  "required=" + DoubleToString(margin, 2) +
-                  ";free=" + DoubleToString(freeMargin, 2) +
-                  ";lot=" + DoubleToString(request.volume, 2));
+         WriteLog(LOG_REJECT, "", "MarginCalcFailed",
+                  "lot=" + DoubleToString(request.volume, 2));
+         return false;
+      }
+      double newLevel = equity / (usedMargin + addMargin) * 100.0;
+      if(newLevel < MinMarginLevel)
+      {
+         WriteLog(LOG_REJECT, "", "MarginLevelInsufficient",
+                  "newLevel=" + DoubleToString(newLevel, 1) +
+                  ";min=" + DoubleToString(MinMarginLevel, 1) +
+                  ";equity=" + DoubleToString(equity, 2) +
+                  ";usedMargin=" + DoubleToString(usedMargin, 2) +
+                  ";addMargin=" + DoubleToString(addMargin, 2));
          return false;
       }
    }

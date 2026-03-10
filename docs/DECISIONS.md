@@ -355,19 +355,24 @@
 
 ---
 
-### [ADR-021] FixedLotモードにFreeMarginチェックを追加
+### [ADR-021] FixedLotモードに証拠金維持率チェックを追加
 
 - **日付:** 2026-03-10
-- **状況:** FixedLotモードではOrderSend前にFreeMargin不足チェックがなく、ブローカー側のエラーに依存していた。RISK_PERCENTモードには既にCalcRiskPercentLot内に95%閾値チェックがあるが、FixedLotモードには同等のガードがなかった
-- **決定:** 全4EA（GOLD/FX/CRYPTO/RoleReversal）のExecuteEntry内で、FixedLotモード時にOrderCalcMarginで必要証拠金を算出し、FreeMarginを超える場合はエントリーを拒否する
+- **状況:** FixedLotモードではOrderSend前に証拠金チェックがなく、ブローカー側のエラーに依存していた。RISK_PERCENTモードには既にCalcRiskPercentLot内に95%閾値チェックがあるが、FixedLotモードには同等のガードがなかった
+- **決定:** 全4EA（GOLD/FX/CRYPTO/RoleReversal）のExecuteEntry内で、FixedLotモード時にOrderCalcMarginで新規必要証拠金を算出し、エントリー後の証拠金維持率（= Equity / (現在の使用証拠金 + 新規必要証拠金) × 100%）が `MinMarginLevel` を下回る場合はエントリーを拒否する
+- **Input:** `MinMarginLevel`（デフォルト1500%、G1:運用グループ）。0=チェック無効
 - **理由:**
   - FixedLotは「このロットで建てたい」という明示指定であり、ロットを縮小して建てるのは意図と異なる
-  - 証拠金不足の場合は建てない（Reject）が正しい挙動
+  - 単純なFreeMargin超過チェックでは「あとどれくらい余裕があるか」が分からない
+  - 証拠金維持率ベースなら、既存ポジションとの合計で安全性を評価できる
+  - 1500%は十分な余裕を持った閾値（ユーザーがInputで調整可能）
   - ブローカーエラーに頼るとログが不明瞭になり、原因特定が困難
-- **没案:** FixedLotでも証拠金に収まるようロットを縮小する → FixedLotの意味が崩れるため不採用
-- **Reject理由:** GOLD/FX/CRYPTO は `MarginInsufficient`（WriteLog経由）、RoleReversalEA は `Print("[MarginInsufficient]")`（既存のログ方式に合わせた）
-- **RISK_PERCENTモードの95%チェックとの違い:** RISK_PERCENTモードは「リスク率から算出したロット」を証拠金内に収まるよう調整する設計。FixedLotモードは「指定ロットが建てられなければ建てない」設計。閾値も異なり、FixedLotモードはFreeMargin 100%を閾値とする（95%マージンなし）
-- **影響:** **固定**（FixedLotモードの基本的な安全策）
+- **没案:**
+  - FreeMargin 100%超過で単純拒否 → 維持率の方が実運用で意味のある指標
+  - FixedLotでも証拠金に収まるようロットを縮小する → FixedLotの意味が崩れるため不採用
+- **Reject理由:** `MarginLevelInsufficient`（newLevel, min, equity, usedMargin, addMarginを出力）
+- **RISK_PERCENTモードの95%チェックとの違い:** RISK_PERCENTモードは「リスク率から算出したロット」をFreeMarginの95%内に収まるよう調整する設計。FixedLotモードは「指定ロットでエントリー後の維持率が閾値を下回れば建てない」設計
+- **影響:** **変更可能**（MinMarginLevel のデフォルト値は運用経験に基づき調整の可能性あり）
 
 ---
 

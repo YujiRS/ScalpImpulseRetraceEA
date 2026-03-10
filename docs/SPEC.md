@@ -205,14 +205,27 @@ C3: スプレッド通常域
 
 ### 9. 決済仕様
 
-サーバーTP = 0（指値TPを使用しない）。EMAクロスで決済。
+サーバーTP = S/Rターゲット（GOLD、有効レベルが見つかった場合）。見つからない場合は0（EMAクロスにフォールバック）。
 
 #### Exit優先順位（固定）
 
 1. **構造破綻（Fib0）**: ImpulseStart終値割れ/超え → 即時成行決済
 2. **時間撤退**: Entry後 TimeExitBars 本以上保有 かつ 損益 ≤ 0 → 成行決済
 3. **建値移動**: RR >= BreakevenRR → SLをエントリー価格に移動（決済ではない）。EnableBreakeven（Input）で市場別にON/OFF可能
-4. **EMAクロス決済**: EMA(Fast) と EMA(Slow) の逆クロス → 確認後に成行決済
+4. **S/R Target TP（GOLD限定）**: M15 Swing High/Lowから検出したS/Rレベルに到達 → 成行決済。サーバーTPとしても設定（二重安全）
+5. **EMAクロス決済 / FlatRange**: EMA(Fast) と EMA(Slow) の逆クロス → 確認後に成行決済。S/Rターゲットが見つからない場合のフォールバック
+
+#### S/R Target TP パラメータ（GOLD限定）
+
+| パラメータ | デフォルト | 説明 |
+|-----------|-----------|------|
+| SR_Exit_Enable | true | S/R Target Exit ON/OFF |
+| SR_SkipATRMult | 1.0 | 近すぎるS/Rレベルをスキップ（ATR(M15)×this圏内） |
+| SR_SwingLookback | 7 | M15 Swing検出のLookback bars |
+| SR_MergeATRMult | 0.5 | 近接S/Rレベル統合距離（ATR(M15)×this） |
+| SR_MinTouches | 2 | S/Rレベルの最小タッチ回数 |
+| SR_MaxAgeBars | 800 | S/Rレベルの最大年齢（M15 bars） |
+| SR_RefreshInterval | 48 | S/R再検出間隔（M15 bars = 12H） |
 
 #### EMAクロス決済パラメータ（M1固定）
 

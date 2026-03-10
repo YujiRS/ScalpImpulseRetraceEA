@@ -49,6 +49,15 @@ input int               ExitMAFastPeriod       = 13;             // Exit EMA Fas
 input int               ExitMASlowPeriod       = 21;             // Exit EMA Slow Period
 input int               ExitConfirmBars        = 1;              // Exit Confirm Bars (1本確認)
 
+// --- Exit: S/R Target TP ---
+input bool              SR_Exit_Enable         = true;            // S/Rターゲット Exit ON/OFF
+input double            SR_SkipATRMult         = 1.0;             // S/Rスキップ閾値 ATR(M15) × this
+input int               SR_SwingLookback       = 7;               // M15 Swing検出 Lookback
+input double            SR_MergeATRMult        = 0.5;             // S/Rレベル統合 ATR(M15) × this
+input int               SR_MinTouches          = 2;               // S/Rレベル最小タッチ回数
+input int               SR_MaxAgeBars          = 800;             // S/Rレベル最大年齢（M15 bars）
+input int               SR_RefreshInterval     = 48;              // S/R再検出間隔（M15 bars = 12H）
+
 // --- Exit: Hybrid (FlatRange) ---
 input bool              HybridExit_Enable      = true;           // Hybrid Exit: 21MA方向一致時FlatRange決済
 input int               HybridExit_TimeExitBars = 30;            // Hybrid Exit: FlatRange時のTimeExit(本)
@@ -214,6 +223,13 @@ int               g_exitEMASlowHandle  = INVALID_HANDLE;
 bool              g_exitPending        = false;
 int               g_exitPendingBars    = 0;
 
+// S/R Target Exit
+double            g_srTargetTP         = 0.0;
+SRLevel_Gold      g_srLevels[];
+int               g_srCount            = 0;
+datetime          g_srLastRefreshBarTime = 0;
+int               g_atrHandleM15       = INVALID_HANDLE;
+
 // Hybrid Exit: FlatRange用
 int               g_frMAHandle         = INVALID_HANDLE;
 ENUM_FR_STATE     g_frState            = FR_INACTIVE;
@@ -248,6 +264,7 @@ int               g_panelMaxRow        = 0;
 #include "GoldBreakoutFilterEA/MABounceEngine.mqh"
 #include "GoldBreakoutFilterEA/EntryEngine.mqh"
 #include "GoldBreakoutFilterEA/RiskManager.mqh"
+#include "GoldBreakoutFilterEA/SRDetector.mqh"
 #include "GoldBreakoutFilterEA/Execution.mqh"
 #include "GoldBreakoutFilterEA/Notification.mqh"
 #include "GoldBreakoutFilterEA/Visualization.mqh"
@@ -343,6 +360,9 @@ void ResetAllState()
 
    g_exitPending     = false;
    g_exitPendingBars = 0;
+
+   // S/R Target
+   g_srTargetTP      = 0.0;
 
    // FlatRange state
    g_frState         = FR_INACTIVE;
@@ -684,6 +704,34 @@ void Process_ENTRY_PLACED()
    {
       g_positionBars = 0;
 
+      // S/R Target TP: エントリー確定時にターゲット選定
+      g_srTargetTP = 0.0;
+      if(SR_Exit_Enable && g_srCount > 0 && g_atrHandleM15 != INVALID_HANDLE)
+      {
+         double m15ATRVal = GetATRValue(Symbol(), PERIOD_M15, 14, 1);
+         if(m15ATRVal > 0)
+         {
+            double skipZone = m15ATRVal * SR_SkipATRMult;
+            double fillPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            g_srTargetTP = FindSRTarget_Gold(g_srLevels, g_srCount,
+                                             fillPrice, g_impulseDir,
+                                             skipZone, SR_MinTouches);
+            if(g_srTargetTP > 0)
+            {
+               // サーバーTPを設定
+               g_tp = g_srTargetTP;
+               ModifySL_TP(PositionGetDouble(POSITION_SL), g_srTargetTP);
+               Print("[SR_Exit] Target TP set: ", DoubleToString(g_srTargetTP,
+                     (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS)),
+                     " dist_ATR=", DoubleToString(MathAbs(g_srTargetTP - fillPrice) / m15ATRVal, 2));
+            }
+            else
+            {
+               Print("[SR_Exit] No valid S/R target found → EMA cross fallback");
+            }
+         }
+      }
+
       // Hybrid Exit: 21MA方向チェック
       g_frState = FR_INACTIVE;
       if(HybridExit_Enable && g_frMAHandle != INVALID_HANDLE)
@@ -781,6 +829,24 @@ int OnInit()
       }
    }
 
+   // S/R Target Exit: M15 ATR handle + initial detection
+   if(SR_Exit_Enable)
+   {
+      g_atrHandleM15 = iATR(Symbol(), PERIOD_M15, 14);
+      if(g_atrHandleM15 == INVALID_HANDLE)
+      {
+         Print("WARNING: Failed to create M15 ATR handle for S/R detection");
+      }
+      else
+      {
+         ArrayResize(g_srLevels, GBF_MAX_SR_LEVELS);
+         RefreshSRLevels_Gold(g_srLevels, g_srCount, g_srLastRefreshBarTime,
+                              SR_SwingLookback, SR_MergeATRMult, SR_MaxAgeBars,
+                              0.3, SR_RefreshInterval);
+         Print("[SR_Exit] Initial S/R detection: ", g_srCount, " levels found");
+      }
+   }
+
    // MA Bounce handles
    if(!InitMABounceHandles())
       return INIT_FAILED;
@@ -821,6 +887,9 @@ void OnDeinit(const int reason)
 
    if(reason != REASON_CHARTCHANGE)
       DeleteMABounceVisualization();
+
+   if(g_atrHandleM15 != INVALID_HANDLE)
+   { IndicatorRelease(g_atrHandleM15); g_atrHandleM15 = INVALID_HANDLE; }
 
    if(g_atrHandleM1 != INVALID_HANDLE)
    { IndicatorRelease(g_atrHandleM1); g_atrHandleM1 = INVALID_HANDLE; }
@@ -866,6 +935,17 @@ void OnTick()
             WriteLog(LOG_IMPULSE, "", "", "FreezeCancel;count=" + IntegerToString(g_freezeCancelCount));
             ChangeState(STATE_IMPULSE_FOUND, "FreezeCancelled_Tick");
          }
+      }
+   }
+
+   // S/R Level refresh (M15 new bar)
+   if(SR_Exit_Enable && g_atrHandleM15 != INVALID_HANDLE)
+   {
+      if(RefreshSRLevels_Gold(g_srLevels, g_srCount, g_srLastRefreshBarTime,
+                              SR_SwingLookback, SR_MergeATRMult, SR_MaxAgeBars,
+                              0.3, SR_RefreshInterval))
+      {
+         Print("[SR_Exit] Refreshed S/R levels: ", g_srCount, " found");
       }
    }
 

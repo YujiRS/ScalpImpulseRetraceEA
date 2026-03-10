@@ -307,7 +307,32 @@ void ManagePosition()
    }
 
    // =====================================================================
-   // Exit優先順位3: モード分岐
+   // Exit優先順位3a: S/R Target TP（M15 S/Rレベル到達）
+   // =====================================================================
+   if(SR_Exit_Enable && g_srTargetTP > 0)
+   {
+      double close1 = iClose(Symbol(), PERIOD_M1, 1);
+      bool srHit = false;
+
+      if(g_impulseDir == DIR_LONG && close1 >= g_srTargetTP)
+         srHit = true;
+      else if(g_impulseDir == DIR_SHORT && close1 <= g_srTargetTP)
+         srHit = true;
+
+      if(srHit)
+      {
+         g_stats.FinalState = "SR_TP_Exit";
+         ClosePosition("SR_TP",
+                  "ExitReason=SR_TP;Target=" + DoubleToString(g_srTargetTP, digits) +
+                  ";Close1=" + DoubleToString(close1, digits) +
+                  ";Bars=" + IntegerToString(g_positionBars));
+         ChangeState(STATE_COOLDOWN, "SR_TP_Exit");
+         return;
+      }
+   }
+
+   // =====================================================================
+   // Exit優先順位4: モード分岐（EMAクロス / FlatRange）
    // =====================================================================
    if(useFR)
       ManagePosition_FlatRange(digits);
@@ -549,6 +574,23 @@ void ManagePosition_EMACross(int digits)
          g_exitPending     = true;
          g_exitPendingBars = 0;
       }
+   }
+}
+
+void ModifySL_TP(double newSL, double newTP)
+{
+   MqlTradeRequest request = {};
+   MqlTradeResult  result  = {};
+
+   request.action   = TRADE_ACTION_SLTP;
+   request.symbol   = Symbol();
+   request.position = g_ticket;
+   request.sl       = newSL;
+   request.tp       = newTP;
+
+   if(!OrderSend(request, result))
+   {
+      Print("[WARN] ModifySL_TP failed: retcode=", result.retcode);
    }
 }
 

@@ -1,103 +1,88 @@
-# FX専用 P2 (A+B) MQL実装プラン
+# Implementation Plan: S/R Target Exit for GOLD
 
-## 変更概要
-sim_results_fx_p2.csv の Base filter (PF2.51, WR13%, 5W/33L) を再現する。
+## 概要
+RoleReversalEA の H1 Swing High/Low → S/R レベル検出ロジックを GoldBreakoutFilterEA に導入。
+最も近い有効 S/R レベルを「サーバーTP」として設定し、EMA クロスはフォールバックとして維持。
 
-## 変更1: Touch1 即エントリー（Touch2 廃止）
-**ファイル**: `GoldBreakoutFilterEA.mq5`
+## シミュレーション結果（根拠）
+- GOLD skip_atr=0.5: Conv比 +5,985 pips 改善
+- SR_TP ヒット時: WR=100%, P&L中央値 +857 pips, bars中央値=23
+- FX/CRYPTO では逆効果 → GOLD 限定
 
-- `Process_FIB_ACTIVE()` で Touch1 検出時、STATE_TOUCH_1 をスキップして
-  直接 STATE_TOUCH_2_WAIT_CONFIRM へ遷移（Confirm 待ちへ直行）
-- STATE_TOUCH_1 は FX では到達しなくなる（デッドコード化、削除はしない）
-- 条件: `g_resolvedMarketMode == MARKET_MODE_FX` のとき限定
+## 設計判断
 
+### Exit 優先順位（変更後）
+1. **構造破綻（Fib0）** — 変更なし
+2. **時間撤退** — 変更なし
+3. **建値移動** — 変更なし
+4. **S/R Target TP** — **NEW**: H1 S/R レベルに到達 → 成行決済
+5. **EMAクロス決済 / FlatRange** — フォールバック（変更なし）
+
+S/R TP は EMA クロスより優先順位が高い。S/R に到達すれば即決済。
+到達しなければ従来通り EMA クロスで決済（フォールバック）。
+
+### S/R 検出タイミング
+- OnInit で H1 S/R レベルを検出、配列に格納
+- H1 新バー発生ごとに再検出（RefreshInterval=12）
+- SRDetector.mqh を GoldBreakoutFilterEA/ 配下に新規作成（RoleReversalEA からロジック移植、依存関係なし）
+
+### S/R ターゲット選定ロジック
+- エントリー時（STATE_ENTRY_PLACED → STATE_IN_POSITION 遷移時）に選定
+- ポジション方向の「直近 S/R レベル」を探す
+- ただし ATR(H1,14) × SR_SkipATRMult 圏内のレベルはスキップ → その先を採用
+- 有効な S/R レベルがない場合 → g_srTargetTP = 0（フォールバック: EMA クロスのみ）
+
+### サーバー TP
+- 現行: g_tp = 0（常時）
+- 変更後: g_tp = g_srTargetTP（S/R レベルが見つかった場合のみ）
+  - サーバーTP として設定するため、ブローカー側で自動決済される
+  - EA 側でも ManagePosition 内で到達チェック（二重安全）
+
+### 新規 Input パラメータ（G1:Exit グループ）
 ```
-// 現行: Touch1 → STATE_TOUCH_1（Leave待ち→Touch2）→ STATE_TOUCH_2_WAIT_CONFIRM
-// 変更: Touch1 → STATE_TOUCH_2_WAIT_CONFIRM（直接Confirm待ち）
-```
-
-## 変更2: pre-entry StructBreak 無効化（FX）
-**ファイル**: `GoldBreakoutFilterEA.mq5`
-
-- `Process_FIB_ACTIVE()` 内の `CheckStructureInvalid_Detail()` を FX では無効化
-- `Process_TOUCH_2_WAIT_CONFIRM()` 内も同様
-- SL は post-entry の ATR ベース SL（既存の CalculateSLTP）で管理
-- 既存 SL 計算 `g_sl = g_impulseStart ± ATR * 0.7` は変更なし（sim と同一）
-
-```mql5
-// FIB_ACTIVE / TOUCH_2_WAIT_CONFIRM 内:
-if(g_resolvedMarketMode != MARKET_MODE_FX)  // FX以外のみStructBreak
-{
-   if(CheckStructureInvalid_Detail(...)) { ... }
-}
-```
-
-## 変更3: M5 slope フィルター追加
-**ファイル**: `EntryEngine.mqh`, `Constants.mqh`, `GoldBreakoutFilterEA.mq5`
-
-sim の Base filter = M5 SMA(21) slope を STRONG のみ通過。
-
-### 3a. Constants.mqh に M5 slope 分類追加
-```mql5
-enum ENUM_M5_SLOPE { M5_SLOPE_FLAT, M5_SLOPE_MID, M5_SLOPE_STRONG };
-```
-
-### 3b. OnInit() に M5 SMA(21) + ATR(M5,14) ハンドル作成
-
-### 3c. EntryEngine.mqh に EvaluateM5SlopeFilter() 追加
-- SMA(21) の slope = SMA21[1] - SMA21[2] on M5
-- threshold = ATR(M5,14) * 0.03（FX FlatThreshold）
-- FLAT: |slope| < threshold
-- MID: threshold <= |slope| < 2*threshold
-- STRONG: |slope| >= 2*threshold
-- 方向一致チェック: slope > 0 → LONG, slope < 0 → SHORT
-- **Base filter: STRONG かつ方向一致のみ PASS**
-
-### 3d. Process_IDLE() の EvaluateTrendFilterAndGuard 後に M5 フィルター評価
-- M15 が PASS (FLAT含む) → M5 評価
-- M5 が PASS → IMPULSE_FOUND へ
-- M5 が NG → reject + DumpImpulseSummary
-
-## 変更4: M15 フィルター reject-only 化
-**ファイル**: `EntryEngine.mqh`
-
-- `EvaluateTrendFilterAndGuard()` の FX ブロック:
-  - 現行: FLAT → reject（return false, "TREND_FLAT"）
-  - 変更: FLAT → **pass**（return true → M5 フィルターへ進む）
-  - MISMATCH → 引き続き reject（"TREND_MISMATCH" → sim では "M15_COUNTER"）
-- ReversalGuard は維持（H1 大陰線/大陽線ブロック）
-
-```mql5
-// FX のみ: FLAT は通過（M5 slope で制御する）
-if(g_resolvedMarketMode == MARKET_MODE_FX && trendDir == "FLAT")
-{
-   // M5 slope に委ねる → return true
-   g_stats.TrendAligned = 0;
-   return true;
-}
+input bool   SR_Exit_Enable       = true;   // S/Rターゲット Exit ON/OFF
+input double SR_SkipATRMult       = 0.5;    // S/Rスキップ閾値 ATR × this
+input int    SR_SwingLookback     = 7;      // H1 Swing検出 Lookback
+input double SR_MergeATRMult      = 0.5;    // S/Rレベル統合 ATR × this
+input int    SR_MinTouches        = 2;      // S/Rレベル最小タッチ回数
+input int    SR_MaxAgeBars        = 200;    // S/Rレベル最大年齢（H1 bars）
+input int    SR_RefreshInterval   = 12;     // S/R再検出間隔（H1 bars）
 ```
 
-## 変更5: FX 専用化
-**ファイル**: `MarketProfile.mqh` or `GoldBreakoutFilterEA.mq5`
+## 実装ファイル
 
-- GOLD/CRYPTO モード時は OnInit() で警告ログ出力
-- エントリーロジック自体は動く（壊さない）が、M5 フィルターの
-  パラメータは FX 用のみチューニング済み
-- 実質的に「FX以外では未検証」扱い
+### 1. 新規: `src/Experts/GoldBreakoutFilterEA/SRDetector.mqh`
+- SRLevel_Gold 構造体定義（RoleReversalEAの同名structと衝突回避）
+- DetectSRLevels_Gold(): H1 Swing High/Low → S/R 検出 + マージ + タッチカウント
+- FindSRTarget_Gold(): 方向別の直近有効レベル探索（skip zone 考慮）
+- RefreshSRLevels_Gold(): H1 新バー時の再検出ラッパー
 
-## 修正順序
-1. Constants.mqh（M5 slope enum 追加）
-2. EntryEngine.mqh（M15 FLAT 通過 + M5 slope フィルター関数）
-3. GoldBreakoutFilterEA.mq5:
-   - OnInit: M5 ハンドル追加
-   - Process_IDLE: M5 フィルター呼び出し
-   - Process_FIB_ACTIVE: Touch1→直接Confirm待ち（FX）
-   - Process_FIB_ACTIVE / Process_TOUCH_2_WAIT_CONFIRM: StructBreak無効化（FX）
-   - OnDeinit: M5 ハンドル解放
-4. コンパイル確認
+### 2. 変更: `src/Experts/GoldBreakoutFilterEA.mq5`
+- Input 追加（SR_Exit_Enable 等）
+- グローバル変数追加（g_srTargetTP, g_srLevels[], g_srCount, g_srLastRefreshBarTime, g_atrHandleH1）
+- OnInit: H1 ATR ハンドル作成 + S/R 初期検出
+- OnTick: H1 新バーチェック → RefreshSRLevels_Gold()
+- Process_ENTRY_PLACED: S/R ターゲット選定 → g_srTargetTP 設定
+- ResetAllState: g_srTargetTP = 0
 
-## 触らないもの
-- RiskManager.mqh（SL計算は既存のまま使う）
-- FibEngine.mqh（Touch/Leave ロジック自体は残す。FX では到達しなくなるだけ）
-- Execution.mqh, Logger.mqh, Visualization.mqh
-- DOC-CORE.md（後回し）
+### 3. 変更: `src/Experts/GoldBreakoutFilterEA/RiskManager.mqh`
+- CalculateSLTP(): SR_Exit_Enable && g_srTargetTP > 0 の場合、g_tp = g_srTargetTP
+
+### 4. 変更: `src/Experts/GoldBreakoutFilterEA/Execution.mqh`
+- ManagePosition(): 建値移動の後、モード分岐（P4/P5）の前に S/R TP チェック追加
+  - LONG: close1 >= g_srTargetTP → ClosePosition("SR_TP")
+  - SHORT: close1 <= g_srTargetTP → ClosePosition("SR_TP")
+
+### 5. 変更: `docs/SPEC.md`
+- §9 決済仕様に S/R Target TP を追加
+
+### 6. 変更: `docs/DECISIONS.md`
+- ADR-019: S/R Target Exit 追加（GOLD限定）の意思決定を記録
+
+## 実装順序
+1. SRDetector.mqh 作成
+2. GoldBreakoutFilterEA.mq5 に Input + グローバル変数 + 初期化 + リフレッシュ追加
+3. RiskManager.mqh: CalculateSLTP に S/R TP 反映
+4. Execution.mqh: ManagePosition に S/R TP チェック追加
+5. SPEC.md / DECISIONS.md 更新
+6. コミット＆プッシュ

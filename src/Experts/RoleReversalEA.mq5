@@ -989,6 +989,11 @@ bool ExecuteEntry(int direction, double sl, double tp, ENUM_CONFIRM_PATTERN conf
                     SymbolInfoDouble(Symbol(), SYMBOL_ASK) :
                     SymbolInfoDouble(Symbol(), SYMBOL_BID);
    request.volume = CalculateLot(request.price, sl);
+   if(request.volume <= 0)
+   {
+      Print("Entry rejected: RiskPercent lot below minimum tradable volume");
+      return false;
+   }
    request.sl = NormalizeDouble(sl, _Digits);
    request.tp = NormalizeDouble(tp, _Digits);
    request.deviation = 20;
@@ -1038,9 +1043,13 @@ double CalculateLot(double entryPrice, double slPrice)
    double slDistance = MathAbs(entryPrice - slPrice);
 
    if(tickValue <= 0 || tickSize <= 0 || slDistance <= 0)
-      return FixedLot;
+      return 0;
 
    double lot = riskAmount / (slDistance / tickSize * tickValue);
+
+   double lotMin = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
+   double lotMax = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
 
    Print("[RiskCalc] equity=", equity,
          " RiskPercent=", RiskPercent,
@@ -1050,14 +1059,17 @@ double CalculateLot(double entryPrice, double slPrice)
          " slDistance=", slDistance,
          " tickValue=", tickValue,
          " tickSize=", tickSize,
-         " rawLot=", lot);
+         " rawLot=", lot,
+         " minLot=", lotMin);
 
-   // Normalize to symbol constraints
-   double lotMin = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN);
-   double lotMax = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MAX);
-   double lotStep = SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_STEP);
+   //--- リスク計算結果がMinLot未満 → エントリーに値しない
+   if(lot < lotMin)
+   {
+      Print("[RiskCalc] rawLot(", lot, ") < minLot(", lotMin, ") → lot insufficient for RiskPercent");
+      return 0;
+   }
 
-   lot = MathMax(lotMin, MathMin(lotMax, lot));
+   lot = MathMin(lotMax, lot);
 
    //--- FreeMargin上限チェック: 算出ロットが実際に建てられるか検証
    ENUM_ORDER_TYPE orderType = (entryPrice > slPrice) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
@@ -1069,7 +1081,12 @@ double CalculateLot(double entryPrice, double slPrice)
       {
          double maxAffordLot = lot * (freeMargin * 0.95) / margin;
          maxAffordLot = MathFloor(maxAffordLot / lotStep) * lotStep;
-         lot = MathMax(lotMin, maxAffordLot);
+         if(maxAffordLot < lotMin)
+         {
+            Print("[RiskCalc] margin-adjusted lot(", maxAffordLot, ") < minLot(", lotMin, ") → insufficient margin");
+            return 0;
+         }
+         lot = maxAffordLot;
       }
    }
 

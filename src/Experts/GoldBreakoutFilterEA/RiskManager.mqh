@@ -147,16 +147,20 @@ double CalcRiskPercentLot(double entryPrice, double slPrice)
    double slDistPts  = MathAbs(entryPrice - slPrice) / _Point;
 
    if(slDistPts <= 0)
-      return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+      return 0;
 
    double tickValue  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double tickSize   = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    double pointValue = tickValue * (_Point / tickSize);
 
    if(pointValue <= 0)
-      return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+      return 0;
 
    double rawLot  = riskAmount / (slDistPts * pointValue);
+
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
    Print("[RiskCalc] equity=", AccountInfoDouble(ACCOUNT_EQUITY),
          " RiskPercent=", RiskPercent,
@@ -168,13 +172,17 @@ double CalcRiskPercentLot(double entryPrice, double slPrice)
          " tickValue=", tickValue,
          " tickSize=", tickSize,
          " pointValue=", pointValue,
-         " rawLot=", rawLot);
+         " rawLot=", rawLot,
+         " minLot=", minLot);
 
-   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   //--- リスク計算結果がMinLot未満 → エントリーに値しない
+   if(rawLot < minLot)
+   {
+      Print("[RiskCalc] rawLot(", rawLot, ") < minLot(", minLot, ") → lot insufficient for RiskPercent");
+      return 0;
+   }
 
-   rawLot = MathMax(minLot, MathMin(maxLot, rawLot));
+   rawLot = MathMin(maxLot, rawLot);
 
    //--- FreeMargin上限チェック: 算出ロットが実際に建てられるか検証
    ENUM_ORDER_TYPE orderType = (entryPrice > slPrice) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
@@ -186,7 +194,12 @@ double CalcRiskPercentLot(double entryPrice, double slPrice)
       {
          double maxAffordLot = rawLot * (freeMargin * 0.95) / margin;
          maxAffordLot = MathFloor(maxAffordLot / lotStep) * lotStep;
-         rawLot = MathMax(minLot, maxAffordLot);
+         if(maxAffordLot < minLot)
+         {
+            Print("[RiskCalc] margin-adjusted lot(", maxAffordLot, ") < minLot(", minLot, ") → insufficient margin");
+            return 0;
+         }
+         rawLot = maxAffordLot;
       }
    }
 

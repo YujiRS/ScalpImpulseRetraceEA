@@ -128,6 +128,14 @@ bool ExecuteEntry()
    request.volume    = (LotMode == LOT_MODE_RISK_PERCENT)
                        ? CalcRiskPercentLot(price, g_sl)
                        : FixedLot;
+
+   if(request.volume <= 0)
+   {
+      WriteLog(LOG_REJECT, "", "LotInsufficient",
+               "RiskPercent lot below minimum tradable volume");
+      return false;
+   }
+
    request.type      = orderType;
    request.price     = price;
    request.sl        = g_sl;

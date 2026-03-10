@@ -338,6 +338,17 @@
 
 ---
 
+### [ADR-020] RISK_PERCENTモードでMinLot未満時はエントリー拒否
+
+- **日付:** 2026-03-10
+- **状況:** CalcRiskPercentLotの計算結果がブローカーのSYMBOL_VOLUME_MIN（最小ロット）未満の場合、従来はMinLotに切り上げてエントリーしていた
+- **決定:** rawLot < minLot の場合は0を返し、Execution側で`LotInsufficient`としてエントリーを拒否する。FreeMargin調整後にminLot未満になった場合も同様
+- **理由:** RiskPercentモードの目的は「指定リスク率以内でトレードする」こと。MinLotへの切り上げは指定リスクを超過する可能性があり、リスク管理の意味をなさない。エントリー可能な資金が不足している状態でMinLotを無理に建てるのは、RiskPercentの趣旨に反する
+- **没案:** 従来動作の維持（MinLotで建てる）— 小口座で全くエントリーできなくなるリスクはあるが、それはリスク管理として正しい挙動
+- **影響:** 全4EA（GOLD/FX/CRYPTO/RoleReversal）に適用。FIXEDモードには影響なし。計算不能時（slDistPts<=0, pointValue<=0等）の早期returnも0に統一
+
+---
+
 ## 未記録の意思決定（コードから推定されるが根拠不明）
 
 以下はコードや仕様書から存在が確認できるが、「なぜそうしたか」の記録が見つからなかったもの。

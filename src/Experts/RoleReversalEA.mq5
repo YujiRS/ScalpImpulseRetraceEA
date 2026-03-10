@@ -4,7 +4,7 @@
 //| H1 S/R breakout → M5 pullback → EMA25+Confirm → Entry            |
 //| Independent EA (not part of Impulse→Retrace family)               |
 //+------------------------------------------------------------------+
-#property copyright "RoleReversalEA"
+#property copyright "RR"
 #property link      ""
 #property version   "1.00"
 #property strict

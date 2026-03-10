@@ -154,7 +154,7 @@ bool ExecuteEntry()
    request.tp        = g_tp;
    request.deviation = (ulong)g_profile.maxSlippagePts;
    request.magic        = 0;
-   request.comment      = EA_NAME + (g_instanceTag != "" ? "[" + g_instanceTag + "]" : "") + " " + g_tradeUUID;
+   request.comment      = EA_NAME + "/" + FlatFilterModeToString(FlatFilterMode) + (g_instanceTag != "" ? "[" + g_instanceTag + "]" : "") + " " + g_tradeUUID;
    request.type_filling = GetFillingMode();
 
    if(!OrderSend(request, result))

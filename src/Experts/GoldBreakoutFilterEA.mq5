@@ -16,6 +16,7 @@
 //|          → Notification → Visualization                            |
 //+------------------------------------------------------------------+
 #include "GoldBreakoutFilterEA/Constants.mqh"
+#include "GoldBreakoutFilterEA/SRDetector.mqh"
 
 //+------------------------------------------------------------------+
 //| Inputs                                                            |
@@ -264,7 +265,6 @@ int               g_panelMaxRow        = 0;
 #include "GoldBreakoutFilterEA/MABounceEngine.mqh"
 #include "GoldBreakoutFilterEA/EntryEngine.mqh"
 #include "GoldBreakoutFilterEA/RiskManager.mqh"
-#include "GoldBreakoutFilterEA/SRDetector.mqh"
 #include "GoldBreakoutFilterEA/Execution.mqh"
 #include "GoldBreakoutFilterEA/Notification.mqh"
 #include "GoldBreakoutFilterEA/Visualization.mqh"

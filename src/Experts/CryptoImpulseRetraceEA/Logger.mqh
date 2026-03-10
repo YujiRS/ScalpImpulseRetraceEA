@@ -133,7 +133,7 @@ void DumpImpulseSummary()
          // STRUCTURE_BREAK
          "StructBreakReason", "StructBreakPriority", "StructBreakRefLevel",
          "StructBreakRefPrice", "StructBreakAtPrice", "StructBreakDistPts", "StructBreakBarShift",
-         "StructBreakSide",
+         "StructBreakSide", "StructBreakAtKind", "StructBreakWickCross", "StructBreakWickDistPts",
 
          // TrendFilter / ReversalGuard
          "TrendFilterEnable", "TrendTF", "TrendMethod", "TrendDir",
@@ -145,7 +145,7 @@ void DumpImpulseSummary()
          "EMACrossDir", "EMACrossAligned",
 
          // FlatFilter
-         "FlatFilterEnable", "FlatBreakoutDir", "FlatMatchResult",
+         "FlatFilterMode", "FlatBreakoutDir", "FlatMatchResult",
          "FlatDuration", "FlatBarsSince"
       );
    }
@@ -193,6 +193,9 @@ void DumpImpulseSummary()
       g_stats.StructBreakDistPts,
       g_stats.StructBreakBarShift,
       g_stats.StructBreakSide,
+      g_stats.StructBreakAtKind,
+      g_stats.StructBreakWickCross,
+      g_stats.StructBreakWickDistPts,
 
       // TrendFilter / ReversalGuard
       (g_stats.TrendFilterEnable>=0) ? IntegerToString(g_stats.TrendFilterEnable) : "",
@@ -215,7 +218,7 @@ void DumpImpulseSummary()
       (g_stats.EMACrossAligned>=0) ? IntegerToString(g_stats.EMACrossAligned) : "",
 
       // FlatFilter
-      (g_stats.FlatFilterEnable>=0) ? IntegerToString(g_stats.FlatFilterEnable) : "",
+      g_stats.FlatFilterMode,
       g_stats.FlatBreakoutDir,
       g_stats.FlatMatchResult,
       g_stats.FlatDuration,

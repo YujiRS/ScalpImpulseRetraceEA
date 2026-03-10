@@ -289,7 +289,7 @@ void EvaluateFlatFilter(string &flatDir, string &matchResult,
    }
 
    // stats記録
-   g_stats.FlatFilterEnable = (int)FlatFilterMode;
+   g_stats.FlatFilterMode   = FlatFilterModeToString(FlatFilterMode);
    g_stats.FlatBreakoutDir  = flatDir;
    g_stats.FlatMatchResult  = matchResult;
    g_stats.FlatDuration     = flatDuration;

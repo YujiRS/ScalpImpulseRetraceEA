@@ -125,7 +125,7 @@ bool ExecuteEntry()
    request.price     = price;
    request.sl        = g_sl;
    request.tp        = g_tp;
-   request.deviation = (ulong)(g_profile.maxSlippagePts / Point());
+   request.deviation = (ulong)g_profile.maxSlippagePts;
    request.magic        = 20260201;
    request.comment      = EA_NAME + " " + g_tradeUUID;
    request.type_filling = GetFillingMode();
@@ -176,7 +176,7 @@ void ClosePosition(string reason, string extraInfo = "")
    request.action       = TRADE_ACTION_DEAL;
    request.symbol       = Symbol();
    request.volume       = PositionGetDouble(POSITION_VOLUME);
-   request.deviation    = (ulong)(g_profile.maxSlippagePts / Point());
+   request.deviation    = (ulong)g_profile.maxSlippagePts;
    request.type_filling = GetFillingMode();
 
    if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)

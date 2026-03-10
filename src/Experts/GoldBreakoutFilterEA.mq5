@@ -32,6 +32,7 @@ input double            RiskPercent            = 1.0;            // RiskPercent 
 input double            MinMarginLevel         = 1500;           // MinMarginLevel(%) エントリー後維持率下限
 input ENUM_LOG_LEVEL    LogLevel               = LOG_LEVEL_NORMAL; // LogLevel
 input int               RunId                  = 0;              // RunId (0=自動連番)
+input string            InstanceTag            = "";             // InstanceTag(コメント欄に付与、例:"Aggressive")
 input double            LongDisableAbove       = 0;              // LongDisableAbove(Bid≧この値でLong禁止, 0=制御なし)
 input double            ShortDisableBelow      = 0;              // ShortDisableBelow(Bid≦この値でShort禁止, 0=制御なし)
 

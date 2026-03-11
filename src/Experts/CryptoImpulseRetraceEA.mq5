@@ -613,10 +613,10 @@ void Process_ENTRY_PLACED()
 {
    if(!g_newBar) return;
 
-   if(PositionSelectByTicket(g_ticket))
+   if(CheckPositionFilled())
    {
-      ChangeState(STATE_IN_POSITION, "OrderFilled");
       g_positionBars = 0;
+      ChangeState(STATE_IN_POSITION, "OrderFilled");
    }
 }
 

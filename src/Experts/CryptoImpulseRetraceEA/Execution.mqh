@@ -86,16 +86,17 @@ bool ExecuteEntry()
 
    if(UseLimitEntry)
    {
+      // 指値エントリー（PENDING注文）
       g_entryType = ENTRY_LIMIT;
       if(g_impulseDir == DIR_LONG)
       {
          price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-         orderType = ORDER_TYPE_BUY;
+         orderType = ORDER_TYPE_BUY_LIMIT;
       }
       else
       {
          price = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-         orderType = ORDER_TYPE_SELL;
+         orderType = ORDER_TYPE_SELL_LIMIT;
       }
    }
    else if(UseMarketFallback)
@@ -123,7 +124,7 @@ bool ExecuteEntry()
    MqlTradeRequest request = {};
    MqlTradeResult  result  = {};
 
-   request.action    = TRADE_ACTION_DEAL;
+   request.action    = (g_entryType == ENTRY_LIMIT) ? TRADE_ACTION_PENDING : TRADE_ACTION_DEAL;
    request.symbol    = Symbol();
    request.volume    = (LotMode == LOT_MODE_RISK_PERCENT)
                        ? CalcRiskPercentLot(price, g_sl)
@@ -179,6 +180,15 @@ bool ExecuteEntry()
    }
 
    g_ticket = result.order;
+
+   if(g_entryType == ENTRY_LIMIT)
+   {
+      g_entryPrice = price;
+      WriteLog(LOG_ENTRY, "", "", "ticket=" + IntegerToString(g_ticket) + ";type=LIMIT",
+               0, 0);
+      return true;
+   }
+
    g_entryPrice = result.price;
 
    double fillDeviation = MathAbs(result.price - price) / Point();
@@ -430,6 +440,63 @@ void ModifySL(double newSL)
    {
       Print("[WARN] ModifySL failed: retcode=", result.retcode);
    }
+}
+
+//+------------------------------------------------------------------+
+//| 指値注文の約定確認: ポジション検索                                   |
+//+------------------------------------------------------------------+
+bool CheckPositionFilled()
+{
+   if(PositionSelectByTicket(g_ticket))
+   {
+      g_entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      return true;
+   }
+
+   if(g_entryType == ENTRY_LIMIT)
+   {
+      if(OrderSelect(g_ticket))
+         return false;
+
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong posTicket = PositionGetTicket(i);
+         if(posTicket > 0 && PositionSelectByTicket(posTicket))
+         {
+            if(PositionGetString(POSITION_SYMBOL) == Symbol() &&
+               StringFind(PositionGetString(POSITION_COMMENT), g_tradeUUID) >= 0)
+            {
+               g_ticket = (long)posTicket;
+               g_entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+               return true;
+            }
+         }
+      }
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| ペンディング注文キャンセル                                          |
+//+------------------------------------------------------------------+
+bool CancelPendingOrder()
+{
+   if(!OrderSelect(g_ticket))
+      return false;
+
+   MqlTradeRequest request = {};
+   MqlTradeResult  result  = {};
+   request.action = TRADE_ACTION_REMOVE;
+   request.order  = g_ticket;
+
+   if(!OrderSend(request, result))
+   {
+      Print("[WARN] CancelPendingOrder failed: retcode=", result.retcode);
+      return false;
+   }
+
+   return (result.retcode == TRADE_RETCODE_DONE);
 }
 
 #endif // __EXECUTION_MQH__

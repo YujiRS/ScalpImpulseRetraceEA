@@ -819,7 +819,7 @@ void Process_ENTRY_PLACED()
 {
    if(!g_newBar) return;
 
-   if(PositionSelectByTicket(g_ticket))
+   if(CheckPositionFilled())
    {
       g_positionBars = 0;
 

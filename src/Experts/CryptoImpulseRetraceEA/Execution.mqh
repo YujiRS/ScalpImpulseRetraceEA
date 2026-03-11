@@ -51,6 +51,13 @@ ENUM_ORDER_TYPE_FILLING GetFillingMode()
 //+------------------------------------------------------------------+
 bool ExecuteEntry()
 {
+   // EnableTrading ガード
+   if(!EnableTrading)
+   {
+      WriteLog(LOG_REJECT, "", "TRADING_DISABLED");
+      return false;
+   }
+
    // 方向レートフィルター
    double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
    if(g_impulseDir == DIR_LONG && LongDisableAbove > 0 && bid >= LongDisableAbove)

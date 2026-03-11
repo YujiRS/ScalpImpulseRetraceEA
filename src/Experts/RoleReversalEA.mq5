@@ -1038,7 +1038,7 @@ bool ExecuteEntry(int direction, double sl, double tp, ENUM_CONFIRM_PATTERN conf
 
    if(result.retcode == TRADE_RETCODE_DONE || result.retcode == TRADE_RETCODE_PLACED)
    {
-      g_posTicket = result.deal;
+      g_posTicket = result.order;
       g_posSL = sl;
       g_posTP = tp;
       return true;
@@ -1103,7 +1103,8 @@ double CalculateLot(double entryPrice, double slPrice)
 
    Print("[RiskCalc] finalLot=", lot, " minLot=", lotMin, " lotStep=", lotStep);
 
-   return NormalizeDouble(lot, 2);
+   int lotDigits = (int)MathRound(-MathLog10(lotStep));
+   return NormalizeDouble(lot, lotDigits);
 }
 
 //+------------------------------------------------------------------+

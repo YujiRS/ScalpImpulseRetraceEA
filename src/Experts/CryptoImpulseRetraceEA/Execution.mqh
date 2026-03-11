@@ -51,6 +51,13 @@ ENUM_ORDER_TYPE_FILLING GetFillingMode()
 //+------------------------------------------------------------------+
 bool ExecuteEntry()
 {
+   // EnableTrading ガード
+   if(!EnableTrading)
+   {
+      WriteLog(LOG_REJECT, "", "TRADING_DISABLED");
+      return false;
+   }
+
    // 方向レートフィルター
    double bid = SymbolInfoDouble(Symbol(), SYMBOL_BID);
    if(g_impulseDir == DIR_LONG && LongDisableAbove > 0 && bid >= LongDisableAbove)
@@ -79,16 +86,17 @@ bool ExecuteEntry()
 
    if(UseLimitEntry)
    {
+      // 指値エントリー（PENDING注文）
       g_entryType = ENTRY_LIMIT;
       if(g_impulseDir == DIR_LONG)
       {
          price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
-         orderType = ORDER_TYPE_BUY;
+         orderType = ORDER_TYPE_BUY_LIMIT;
       }
       else
       {
          price = SymbolInfoDouble(Symbol(), SYMBOL_BID);
-         orderType = ORDER_TYPE_SELL;
+         orderType = ORDER_TYPE_SELL_LIMIT;
       }
    }
    else if(UseMarketFallback)
@@ -116,7 +124,7 @@ bool ExecuteEntry()
    MqlTradeRequest request = {};
    MqlTradeResult  result  = {};
 
-   request.action    = TRADE_ACTION_DEAL;
+   request.action    = (g_entryType == ENTRY_LIMIT) ? TRADE_ACTION_PENDING : TRADE_ACTION_DEAL;
    request.symbol    = Symbol();
    request.volume    = (LotMode == LOT_MODE_RISK_PERCENT)
                        ? CalcRiskPercentLot(price, g_sl)
@@ -172,12 +180,25 @@ bool ExecuteEntry()
    }
 
    g_ticket = result.order;
+
+   if(g_entryType == ENTRY_LIMIT)
+   {
+      g_entryPrice = price;
+      WriteLog(LOG_ENTRY, "", "", "ticket=" + IntegerToString(g_ticket) + ";type=LIMIT",
+               0, 0);
+      return true;
+   }
+
    g_entryPrice = result.price;
 
    double fillDeviation = MathAbs(result.price - price) / Point();
    if(fillDeviation > g_profile.maxFillDeviationPts)
    {
-      ClosePosition("FillDeviationExceeded");
+      if(!ClosePosition("FillDeviationExceeded"))
+      {
+         Print("[WARN] FillDeviationExceeded but ClosePosition failed, keeping position");
+         return true;
+      }
       WriteLog(LOG_REJECT, "", "FillDeviationExceeded",
                "deviation=" + DoubleToString(fillDeviation, 1));
       return false;
@@ -192,10 +213,10 @@ bool ExecuteEntry()
 //+------------------------------------------------------------------+
 //| ポジション管理                                                     |
 //+------------------------------------------------------------------+
-void ClosePosition(string reason, string extraInfo = "")
+bool ClosePosition(string reason, string extraInfo = "")
 {
    if(!PositionSelectByTicket(g_ticket))
-      return;
+      return false;
 
    MqlTradeRequest request = {};
    MqlTradeResult  result  = {};
@@ -217,14 +238,24 @@ void ClosePosition(string reason, string extraInfo = "")
       request.price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    }
 
-   if(OrderSend(request, result))
+   if(!OrderSend(request, result))
    {
-      string logExtra = "closePrice=" + DoubleToString(result.price,
-               (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-      if(extraInfo != "")
-         logExtra += ";" + extraInfo;
-      WriteLog(LOG_EXIT, reason, "", logExtra);
+      Print("[WARN] ClosePosition failed: OrderSend error, retcode=", result.retcode);
+      return false;
    }
+
+   if(result.retcode != TRADE_RETCODE_DONE)
+   {
+      Print("[WARN] ClosePosition failed: retcode=", result.retcode);
+      return false;
+   }
+
+   string logExtra = "closePrice=" + DoubleToString(result.price,
+            (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
+   if(extraInfo != "")
+      logExtra += ";" + extraInfo;
+   WriteLog(LOG_EXIT, reason, "", logExtra);
+   return true;
 }
 
 // Exit EMA値取得ヘルパー
@@ -263,11 +294,13 @@ void ManagePosition()
 
       if(structBreak)
       {
-         g_stats.FinalState = "StructBreak_Fib0";
-         ClosePosition("StructBreak_Fib0",
+         if(ClosePosition("StructBreak_Fib0",
                   "ExitReason=STRUCT_BREAK;Fib0=" + DoubleToString(g_impulseStart, digits) +
-                  ";Close1=" + DoubleToString(close1, digits));
-         ChangeState(STATE_COOLDOWN, "StructBreak_Fib0");
+                  ";Close1=" + DoubleToString(close1, digits)))
+         {
+            g_stats.FinalState = "StructBreak_Fib0";
+            ChangeState(STATE_COOLDOWN, "StructBreak_Fib0");
+         }
          return;
       }
    }
@@ -279,10 +312,12 @@ void ManagePosition()
       double posProfit = PositionGetDouble(POSITION_PROFIT);
       if(posProfit <= 0)
       {
-         g_stats.FinalState = "TimeExit";
-         ClosePosition("TimeExit",
-                  "ExitReason=TIMEOUT;Bars=" + IntegerToString(g_positionBars));
-         ChangeState(STATE_COOLDOWN, "TimeExit");
+         if(ClosePosition("TimeExit",
+                  "ExitReason=TIMEOUT;Bars=" + IntegerToString(g_positionBars)))
+         {
+            g_stats.FinalState = "TimeExit";
+            ChangeState(STATE_COOLDOWN, "TimeExit");
+         }
          return;
       }
    }
@@ -349,13 +384,15 @@ void ManagePosition()
 
          if(crossMaintained && g_exitPendingBars >= ExitConfirmBars)
          {
-            g_stats.FinalState = "EMACross_Exit";
-            ClosePosition("EMACross",
+            if(ClosePosition("EMACross",
                      "ExitReason=EMA_CROSS;CrossDir=" + crossDir +
                      ";EMA" + IntegerToString(ExitMAFastPeriod) + "=" + DoubleToString(emaFast1, digits) +
                      ";EMA" + IntegerToString(ExitMASlowPeriod) + "=" + DoubleToString(emaSlow1, digits) +
-                     ";ConfirmBars=" + IntegerToString(g_exitPendingBars));
-            ChangeState(STATE_COOLDOWN, "EMACross_Exit");
+                     ";ConfirmBars=" + IntegerToString(g_exitPendingBars)))
+            {
+               g_stats.FinalState = "EMACross_Exit";
+               ChangeState(STATE_COOLDOWN, "EMACross_Exit");
+            }
             return;
          }
          else if(!crossMaintained)
@@ -403,6 +440,63 @@ void ModifySL(double newSL)
    {
       Print("[WARN] ModifySL failed: retcode=", result.retcode);
    }
+}
+
+//+------------------------------------------------------------------+
+//| 指値注文の約定確認: ポジション検索                                   |
+//+------------------------------------------------------------------+
+bool CheckPositionFilled()
+{
+   if(PositionSelectByTicket(g_ticket))
+   {
+      g_entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      return true;
+   }
+
+   if(g_entryType == ENTRY_LIMIT)
+   {
+      if(OrderSelect(g_ticket))
+         return false;
+
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong posTicket = PositionGetTicket(i);
+         if(posTicket > 0 && PositionSelectByTicket(posTicket))
+         {
+            if(PositionGetString(POSITION_SYMBOL) == Symbol() &&
+               StringFind(PositionGetString(POSITION_COMMENT), g_tradeUUID) >= 0)
+            {
+               g_ticket = (long)posTicket;
+               g_entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+               return true;
+            }
+         }
+      }
+   }
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| ペンディング注文キャンセル                                          |
+//+------------------------------------------------------------------+
+bool CancelPendingOrder()
+{
+   if(!OrderSelect(g_ticket))
+      return false;
+
+   MqlTradeRequest request = {};
+   MqlTradeResult  result  = {};
+   request.action = TRADE_ACTION_REMOVE;
+   request.order  = g_ticket;
+
+   if(!OrderSend(request, result))
+   {
+      Print("[WARN] CancelPendingOrder failed: retcode=", result.retcode);
+      return false;
+   }
+
+   return (result.retcode == TRADE_RETCODE_DONE);
 }
 
 #endif // __EXECUTION_MQH__

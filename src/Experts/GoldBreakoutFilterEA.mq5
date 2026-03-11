@@ -201,6 +201,10 @@ string            g_bandObjName        = "";
 // タイマーカウンタ（Freeze後からのBar数）
 int               g_barsAfterFreeze    = 0;
 
+// ENTRY_PLACEDタイムアウト
+int               g_entryPlacedBars    = 0;
+const int         ENTRY_PLACED_TIMEOUT = 10;
+
 // Cooldownカウンタ
 int               g_cooldownBars       = 0;
 int               g_cooldownDuration   = 3;
@@ -696,6 +700,7 @@ void Process_MA_PULLBACK_WAIT()
       }
 
       g_stats.EntryGatePass = true;
+      g_entryPlacedBars = 0;
       ChangeState(STATE_ENTRY_PLACED, "EntryPlaced");
       return;
    }
@@ -705,8 +710,11 @@ void Process_ENTRY_PLACED()
 {
    if(!g_newBar) return;
 
-   if(PositionSelectByTicket(g_ticket))
+   g_entryPlacedBars++;
+
+   if(CheckPositionFilled())
    {
+      g_entryPlacedBars = 0;
       g_positionBars = 0;
 
       // S/R Target TP: エントリー確定時にターゲット選定
@@ -765,6 +773,19 @@ void Process_ENTRY_PLACED()
       }
 
       ChangeState(STATE_IN_POSITION, "OrderFilled");
+      return;
+   }
+
+   // タイムアウト: 一定本数経過後にIDLEにフォールバック
+   if(g_entryPlacedBars >= ENTRY_PLACED_TIMEOUT)
+   {
+      if(g_entryType == ENTRY_LIMIT)
+         CancelPendingOrder();
+      g_entryPlacedBars = 0;
+      WriteLog(LOG_REJECT, "", "ENTRY_PLACED_TIMEOUT",
+               "Bars=" + IntegerToString(g_entryPlacedBars));
+      ChangeState(STATE_IDLE, "EntryPlacedTimeout");
+      ResetAllState();
    }
 }
 

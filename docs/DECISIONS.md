@@ -379,6 +379,19 @@
 
 ---
 
+### [ADR-022] CRYPTO Confirm を CloseBounce / WickRejection に確定（実装が正典）
+
+- **日付:** 2026-03-11
+- **状況:** SPEC.md 旧版では CRYPTO の Confirm を「MicroBreak（Lookback型、直近3本）のみ」と定義していたが、ADR-017 で GOLD/CRYPTO を MA Bounce 方式に移行した際、実装では CloseBounce / WickRejection（GOLD と同一）が採用されていた。SPEC と実装が不一致だった
+- **決定:** 実装を正典とする。CRYPTO の Confirm は CloseBounce OR WickRejection（GOLD と同一）。MicroBreak Lookback 型は廃止
+- **理由:**
+  - ADR-017 で GOLD/CRYPTO ともに MA Bounce 方式に移行した際、HTF足確定ベースの反転確認（CloseBounce/WickRejection）が自然な判定方式であり、M1ベースの MicroBreak Lookback は MA Bounce の判定タイミング（HTF足単位）と整合しない
+  - SPEC.md の CRYPTO Confirm 定義が ADR-017 移行時に更新漏れだった
+- **没案:** MicroBreak Lookback を維持 → MA Bounce の HTF 足単位判定と M1 足単位判定の混在は複雑であり、GOLD と異なる判定方式にする合理的理由がない
+- **影響:** SPEC.md 第7節・EA一覧・MarketProfile表を更新。ADR-005（Confirm条件の市場別差異化）の CRYPTO 欄を上書き
+
+---
+
 ## 未記録の意思決定（コードから推定されるが根拠不明）
 
 以下はコードや仕様書から存在が確認できるが、「なぜそうしたか」の記録が見つからなかったもの。

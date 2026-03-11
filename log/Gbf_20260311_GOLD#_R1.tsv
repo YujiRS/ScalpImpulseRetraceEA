@@ -1,0 +1,2 @@
+Time	Symbol	MarketMode	State	TradeUUID	Event	StartAdjusted	DeepBandON	ImpulseATR	StartPrice	EndPrice	BandLower	BandUpper	TouchCount	FreezeCancelCount	ConfirmType	EntryType	EntryPrice	SL	TP	SpreadPts	SlippagePts	FillDeviationPts	Result	RejectReason	Extra
+2026.03.11 04:03:00	GOLD#	GOLD	IDLE	20260311040300_01	LOG_REJECT	false	false	3.04	5208.50	5199.67	0.00	0.00	0	0	NONE	NONE	0.00	0.00	0.00	31.0	0.0	0.0		TREND_FLAT	

@@ -665,8 +665,17 @@ void ModifySL(double newSL)
 
    if(!OrderSend(request, result))
    {
-      Print("[WARN] ModifySL failed: retcode=", result.retcode);
+      Print("[WARN] ModifySL failed: OrderSend error, retcode=", result.retcode);
+      return;
    }
+
+   if(result.retcode != TRADE_RETCODE_DONE)
+   {
+      Print("[WARN] ModifySL retcode!=DONE: retcode=", result.retcode);
+      return;
+   }
+
+   g_sl = newSL;
 }
 
 #endif // __EXECUTION_MQH__

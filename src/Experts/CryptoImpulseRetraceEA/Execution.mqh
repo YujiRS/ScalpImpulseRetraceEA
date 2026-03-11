@@ -177,7 +177,11 @@ bool ExecuteEntry()
    double fillDeviation = MathAbs(result.price - price) / Point();
    if(fillDeviation > g_profile.maxFillDeviationPts)
    {
-      ClosePosition("FillDeviationExceeded");
+      if(!ClosePosition("FillDeviationExceeded"))
+      {
+         Print("[WARN] FillDeviationExceeded but ClosePosition failed, keeping position");
+         return true;
+      }
       WriteLog(LOG_REJECT, "", "FillDeviationExceeded",
                "deviation=" + DoubleToString(fillDeviation, 1));
       return false;
@@ -192,10 +196,10 @@ bool ExecuteEntry()
 //+------------------------------------------------------------------+
 //| ポジション管理                                                     |
 //+------------------------------------------------------------------+
-void ClosePosition(string reason, string extraInfo = "")
+bool ClosePosition(string reason, string extraInfo = "")
 {
    if(!PositionSelectByTicket(g_ticket))
-      return;
+      return false;
 
    MqlTradeRequest request = {};
    MqlTradeResult  result  = {};
@@ -217,14 +221,24 @@ void ClosePosition(string reason, string extraInfo = "")
       request.price = SymbolInfoDouble(Symbol(), SYMBOL_ASK);
    }
 
-   if(OrderSend(request, result))
+   if(!OrderSend(request, result))
    {
-      string logExtra = "closePrice=" + DoubleToString(result.price,
-               (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
-      if(extraInfo != "")
-         logExtra += ";" + extraInfo;
-      WriteLog(LOG_EXIT, reason, "", logExtra);
+      Print("[WARN] ClosePosition failed: OrderSend error, retcode=", result.retcode);
+      return false;
    }
+
+   if(result.retcode != TRADE_RETCODE_DONE)
+   {
+      Print("[WARN] ClosePosition failed: retcode=", result.retcode);
+      return false;
+   }
+
+   string logExtra = "closePrice=" + DoubleToString(result.price,
+            (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS));
+   if(extraInfo != "")
+      logExtra += ";" + extraInfo;
+   WriteLog(LOG_EXIT, reason, "", logExtra);
+   return true;
 }
 
 // Exit EMA値取得ヘルパー
@@ -263,11 +277,13 @@ void ManagePosition()
 
       if(structBreak)
       {
-         g_stats.FinalState = "StructBreak_Fib0";
-         ClosePosition("StructBreak_Fib0",
+         if(ClosePosition("StructBreak_Fib0",
                   "ExitReason=STRUCT_BREAK;Fib0=" + DoubleToString(g_impulseStart, digits) +
-                  ";Close1=" + DoubleToString(close1, digits));
-         ChangeState(STATE_COOLDOWN, "StructBreak_Fib0");
+                  ";Close1=" + DoubleToString(close1, digits)))
+         {
+            g_stats.FinalState = "StructBreak_Fib0";
+            ChangeState(STATE_COOLDOWN, "StructBreak_Fib0");
+         }
          return;
       }
    }
@@ -279,10 +295,12 @@ void ManagePosition()
       double posProfit = PositionGetDouble(POSITION_PROFIT);
       if(posProfit <= 0)
       {
-         g_stats.FinalState = "TimeExit";
-         ClosePosition("TimeExit",
-                  "ExitReason=TIMEOUT;Bars=" + IntegerToString(g_positionBars));
-         ChangeState(STATE_COOLDOWN, "TimeExit");
+         if(ClosePosition("TimeExit",
+                  "ExitReason=TIMEOUT;Bars=" + IntegerToString(g_positionBars)))
+         {
+            g_stats.FinalState = "TimeExit";
+            ChangeState(STATE_COOLDOWN, "TimeExit");
+         }
          return;
       }
    }
@@ -349,13 +367,15 @@ void ManagePosition()
 
          if(crossMaintained && g_exitPendingBars >= ExitConfirmBars)
          {
-            g_stats.FinalState = "EMACross_Exit";
-            ClosePosition("EMACross",
+            if(ClosePosition("EMACross",
                      "ExitReason=EMA_CROSS;CrossDir=" + crossDir +
                      ";EMA" + IntegerToString(ExitMAFastPeriod) + "=" + DoubleToString(emaFast1, digits) +
                      ";EMA" + IntegerToString(ExitMASlowPeriod) + "=" + DoubleToString(emaSlow1, digits) +
-                     ";ConfirmBars=" + IntegerToString(g_exitPendingBars));
-            ChangeState(STATE_COOLDOWN, "EMACross_Exit");
+                     ";ConfirmBars=" + IntegerToString(g_exitPendingBars)))
+            {
+               g_stats.FinalState = "EMACross_Exit";
+               ChangeState(STATE_COOLDOWN, "EMACross_Exit");
+            }
             return;
          }
          else if(!crossMaintained)

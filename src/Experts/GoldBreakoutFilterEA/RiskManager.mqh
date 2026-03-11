@@ -203,7 +203,8 @@ double CalcRiskPercentLot(double entryPrice, double slPrice)
 
    Print("[RiskCalc] finalLot=", rawLot, " minLot=", minLot, " lotStep=", lotStep);
 
-   return NormalizeDouble(rawLot, 8);
+   int lotDigits = (int)MathRound(-MathLog10(lotStep));
+   return NormalizeDouble(rawLot, lotDigits);
 }
 
 #endif // __RISK_MANAGER_MQH__

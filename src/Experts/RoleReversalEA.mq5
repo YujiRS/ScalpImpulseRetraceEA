@@ -1103,7 +1103,8 @@ double CalculateLot(double entryPrice, double slPrice)
 
    Print("[RiskCalc] finalLot=", lot, " minLot=", lotMin, " lotStep=", lotStep);
 
-   return NormalizeDouble(lot, 2);
+   int lotDigits = (int)MathRound(-MathLog10(lotStep));
+   return NormalizeDouble(lot, lotDigits);
 }
 
 //+------------------------------------------------------------------+

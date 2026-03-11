@@ -21,7 +21,7 @@
 |------|---------|-----------|------|
 | GoldBreakoutFilterEA | GOLD (XAUUSD) | v2.0 | DeepBand条件付き61.8 / Level3 Freeze / WickRejection Confirm |
 | FXRetracePulseEA | FX (USDJPY等) | v2.0 | M5 Slope Filter / OptionalBand38 / Engulfing Confirm |
-| CryptoImpulseRetraceEA | CRYPTO (BTCUSD等) | v1.0 | FlatFilter / EMA21/50 Cross / MicroBreak(Lookback型) Confirm |
+| CryptoImpulseRetraceEA | CRYPTO (BTCUSD等) | v1.0 | FlatFilter / EMA21/50 Cross / MA Bounce（CloseBounce/WickRejection） |
 
 ---
 
@@ -45,32 +45,46 @@
 
 ### 2. 状態遷移（ステートマシン）
 
+#### FX（Fib 2-Touch方式）
 ```
 IDLE → IMPULSE_FOUND → IMPULSE_CONFIRMED → FIB_ACTIVE → TOUCH_1
   → TOUCH_2_WAIT_CONFIRM → ENTRY_PLACED → IN_POSITION → COOLDOWN → IDLE
 ```
 
-| StateID | State | 意味 |
-|---------|-------|------|
-| 0 | IDLE | 監視中 |
-| 1 | IMPULSE_FOUND | Impulse認定済 |
-| 2 | IMPULSE_CONFIRMED | Impulse完了確定（Freeze成立） |
-| 3 | FIB_ACTIVE | Fib凍結＆押し待ち |
-| 4 | TOUCH_1 | 1回目タッチ（エントリー禁止） |
-| 5 | TOUCH_2_WAIT_CONFIRM | 2回目タッチ＋反転条件待ち |
-| 6 | ENTRY_PLACED | 注文発行済 |
-| 7 | IN_POSITION | 保有中 |
-| 8 | COOLDOWN | 再エントリー抑制中 |
+#### GOLD / CRYPTO（MA Bounce方式、ADR-017）
+```
+IDLE → IMPULSE_FOUND → IMPULSE_CONFIRMED → MA_PULLBACK_WAIT
+  → ENTRY_PLACED → IN_POSITION → COOLDOWN → IDLE
+```
+
+| StateID | State | FX | GOLD / CRYPTO |
+|---------|-------|----|---------------|
+| 0 | IDLE | 監視中 | 監視中 |
+| 1 | IMPULSE_FOUND | Impulse認定済 | Impulse認定済 |
+| 2 | IMPULSE_CONFIRMED | Impulse完了確定（Freeze成立） | Impulse完了確定（Freeze成立） |
+| 3 | FIB_ACTIVE / MA_PULLBACK_WAIT | Fib凍結＆押し待ち | HTF EMAバンド内タッチ＆反転確認待ち |
+| 4 | TOUCH_1 | 1回目タッチ（エントリー禁止） | **RESERVED** |
+| 5 | TOUCH_2_WAIT_CONFIRM | 2回目タッチ＋反転条件待ち | **RESERVED** |
+| 6 | ENTRY_PLACED | 注文発行済 | 注文発行済 |
+| 7 | IN_POSITION | 保有中 | 保有中 |
+| 8 | COOLDOWN | 再エントリー抑制中 | 再エントリー抑制中 |
 
 **StateIDは変更禁止。**
 
-主要な遷移ルール:
+主要な遷移ルール（共通）:
 - IMPULSE_CONFIRMED → IDLE: RiskGateFail（取引価値なし判定）。ただし LogLevel=ANALYZE 時は下記SoftGateへ
+- COOLDOWN → IDLE: CooldownDuration（3本、ハードコード）経過で遷移
+- **SoftGate（LogLevel=ANALYZE専用）**: RiskGateFail発生時にIDLE遷移せず、g_riskGateSoftPass=trueのまま後続ロジックを継続。Confirm到達時にRISK_GATE_SOFT_BLOCKでRejectしIDLEへ遷移（エントリーはしないが、どこまで進んだかを記録する分析用機能）
+
+FX固有の遷移ルール:
 - IMPULSE_CONFIRMED → FIB_ACTIVE: RiskGatePass（Fib算出・凍結）
 - TOUCH_2_WAIT_CONFIRM → ENTRY_PLACED: Confirm成立
 - TOUCH_2_WAIT_CONFIRM → IDLE: ConfirmTimeLimitExpired
-- **SoftGate（LogLevel=ANALYZE専用）**: RiskGateFail発生時にIDLE遷移せず、g_riskGateSoftPass=trueのまま後続ロジックを継続。Confirm到達時にRISK_GATE_SOFT_BLOCKでRejectしIDLEへ遷移（エントリーはしないが、どこまで進んだかを記録する分析用機能）
-- COOLDOWN → IDLE: CooldownDuration（3本、ハードコード）経過で遷移
+
+GOLD/CRYPTO固有の遷移ルール（ADR-017）:
+- IMPULSE_CONFIRMED → MA_PULLBACK_WAIT: RiskGatePass（MA Bounce設定・Fib算出はStructure Break判定用に維持）
+- MA_PULLBACK_WAIT → ENTRY_PLACED: HTF EMAバンド内タッチ + MA方向一致 + Confirm（CloseBounce or WickRejection）成立
+- MA_PULLBACK_WAIT → IDLE: FreezeCancelまたは構造破綻
 
 ### 3. Impulse検出・確定
 
@@ -103,13 +117,14 @@ IDLE → IMPULSE_FOUND → IMPULSE_CONFIRMED → FIB_ACTIVE → TOUCH_1
 
 #### BandWidthPts算出（唯一の定義）
 
-| 市場 | 算出式 | 確定タイミング |
-|------|--------|---------------|
-| FX | 現在Spread × 2.0 | IMPULSE_CONFIRMED→FIB_ACTIVE遷移時 |
-| GOLD | ATR(M1) × 0.05 | Freeze時点 |
-| CRYPTO | ATR(M1) × 0.08 | Freeze時点 |
+| 市場 | 方式 | 算出式 | 確定タイミング |
+|------|------|--------|---------------|
+| FX | Fib帯幅 | 現在Spread × 2.0 | IMPULSE_CONFIRMED→FIB_ACTIVE遷移時 |
+| GOLD | MA Bounceバンド幅（ADR-017） | ATR(M15) × MABounce_BandMult(0.3) | MA_PULLBACK_WAIT設定時 |
+| CRYPTO | MA Bounceバンド幅（ADR-017） | ATR(M5) × MABounce_BandMult(0.5) | MA_PULLBACK_WAIT設定時 |
 
-同一TradeUUID内で固定。Input変更不可（MarketProfile内部定義のみ）。
+- FX: 同一TradeUUID内で固定。Input変更不可（MarketProfile内部定義のみ）
+- GOLD/CRYPTO: HTF EMA(13) ± BandWidthPts でバンドを形成。MABounce_BandMultはInput変更可能
 
 #### GOLD DeepBand ON条件
 ```
@@ -122,7 +137,7 @@ C2: 直近スイープ痕跡あり
 C3: スプレッド通常域
 ```
 
-### 5. タッチ判定
+### 5. タッチ判定（FXのみ。GOLD/CRYPTOはMA Bounce方式のためSection 7参照）
 
 - **侵入**: Long: Low <= BandUpper / Short: High >= BandLower
 - **1回目タッチ**: エントリー禁止（例外なし）
@@ -182,20 +197,34 @@ C3: スプレッド通常域
 
 ### 7. エントリー条件（Confirm）
 
+**同一Impulse内の最大エントリー回数: 1回（固定）。**
+
+#### FX（Fib 2-Touch方式）
+
 2回目タッチ成立後、M1確定足で判定:
 
-| 市場 | 採用Confirm | 優先順位 |
-|------|-----------|---------|
-| FX | Engulfing OR MicroBreak（フラクタル型） | Engulfing > MicroBreak |
-| GOLD | WickRejection OR MicroBreak（フラクタル型） | WickRejection > MicroBreak |
-| CRYPTO | MicroBreak（Lookback型、直近3本）のみ | — |
+| 採用Confirm | 優先順位 |
+|-----------|---------|
+| Engulfing OR MicroBreak（フラクタル型） | Engulfing > MicroBreak |
 
-- **WickRejection（GOLD）**: ヒゲ比率 >= WickRatioMin（0.55）。帯内での反発をヒゲ長で確認
-- **Engulfing（FX）**: 確定足実体が直前足実体を包む
-- **MicroBreak フラクタル型（FX/GOLD）**: 左右2本の極値（i=3〜20範囲で探索）をブレイク
-- **MicroBreak Lookback型（CRYPTO）**: 直近3本の高安（High[2..4]/Low[2..4]）をブレイク。フラクタルより簡素で速い
+- **Engulfing**: 確定足実体が直前足実体を包む
+- **MicroBreak フラクタル型**: 左右2本の極値（i=3〜20範囲で探索）をブレイク
 
-**同一Impulse内の最大エントリー回数: 1回（固定）。**
+#### GOLD / CRYPTO（MA Bounce方式、ADR-017）
+
+HTF足確定時にEMAバンド内タッチ + MA方向一致を確認後、反転確認で判定:
+
+| 市場 | HTF | EMA Period | BandMult | 採用Confirm |
+|------|-----|------------|----------|-------------|
+| GOLD | M15 | 13 | 0.3 | CloseBounce OR WickRejection |
+| CRYPTO | M5 | 13 | 0.5 | CloseBounce OR WickRejection |
+
+- **CloseBounce**: HTF確定足のCloseがOpen比でImpulse方向に反発（Long: Close > Open, Short: Close < Open）
+- **WickRejection**: HTF確定足のヒゲ比率がWickRatioMin以上で、Impulse方向への反発を示す
+- **MA方向チェック**: EMA(shift) vs EMA(shift+1) でMA自体がImpulse方向に向いていることを確認
+- **バンド内タッチ**: HTF足のLow（Long）/ High（Short）がEMA ± BandWidthPts の範囲内に到達
+
+> **注**: CRYPTO の Confirm は、SPEC 旧版では MicroBreak Lookback 型と定義していたが、ADR-017 に基づきGOLDと同じ CloseBounce / WickRejection に変更。実装が正典（ADR-022参照）。
 
 ### 8. 注文方式
 
@@ -368,13 +397,13 @@ EMACross_Exit / StructBreak_Fib0 / TimeExit / EntryGate_RangeCost_Fail / SL_Hit
 | FreezeCancelWindowBars | 2 | 3 | 1 |
 | FreezeCancelMethod | 1tick超 | Spread×2 | 0.1% |
 | RetraceBand | 50 (+Opt38) | 50 (+DeepBand条件付61.8) | 50-61.8常時 |
-| BandWidthPts算出 | Spread×2.0 | ATR(M1)×0.05 | ATR(M1)×0.08 |
+| BandWidthPts算出 | Spread×2.0 | ATR(M15)×BandMult(0.3) | ATR(M5)×BandMult(0.5) |
 | LeaveDistanceMult | 1.5 | 1.5 | 1.2 |
 | LeaveMinBars | 1 | 1 | 1 |
 | RetouchTimeLimitBars | 35 | 30 | 25 |
 | ResetMinBars | 10 | 8 | 6 |
 | ConfirmTimeLimitBars | 6 | 5 | 4 |
-| Confirm | Engulfing/MicroBreak | WickReject/MicroBreak | MicroBreak(LB)のみ |
+| Confirm | Engulfing/MicroBreak | CloseBounce/WickRejection（MA Bounce） | CloseBounce/WickRejection（MA Bounce） |
 | WickRatioMin | — | 0.55 | — |
 | MaxSlippagePts (default) | 2.0 | 5.0 | 8.0 |
 | MaxFillDeviationPts (default) | 3.0 | 8.0 | 12.0 |

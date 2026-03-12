@@ -83,7 +83,7 @@ input int               TradeHourEnd           = 21;             // Trading End 
 input int               MaxSpreadPoints        = 0;              // Max Spread (points, 0=unlimited)
 
 // 
-input int               MagicNumber            = 0;                          // Magic Number
+input int               MagicNumber            = 55001;                      // Magic Number
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
@@ -154,6 +154,10 @@ int OnInit()
    g_lastH1Bar = 0;
    g_h1Regime  = 0;
    g_h1RegimeReady = false;
+
+   // Warn if MagicNumber is 0 (may pick up manual / other-EA positions)
+   if(MagicNumber == 0)
+      Print("[SS] WARNING: MagicNumber=0 — may manage positions not opened by this EA");
 
    // Check for existing position
    FindOwnPosition();

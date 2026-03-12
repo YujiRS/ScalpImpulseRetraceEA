@@ -946,20 +946,48 @@ void FindOwnPosition()
       long posType = PositionGetInteger(POSITION_TYPE);
       g_posDir = (posType == POSITION_TYPE_BUY) ? 1 : -1;
 
-      // Initialize trailing trackers
-      if(g_posDir == 1)
-      {
-         g_trailHighest = g_posOpenPrice;
-         g_trailLowest  = 0;
-      }
-      else
-      {
-         g_trailLowest  = g_posOpenPrice;
-         g_trailHighest = 0;
-      }
+      // Reconstruct trailing trackers from M5 bars since position open
+      ReconstructTrailTrackers();
 
       break;
    }
+}
+
+//+------------------------------------------------------------------+
+//| Reconstruct trail highest/lowest from M5 bars since entry         |
+//+------------------------------------------------------------------+
+void ReconstructTrailTrackers()
+{
+   datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
+
+   // Count M5 bars since position open
+   int barShift = iBarShift(_Symbol, PERIOD_M5, posTime);
+   if(barShift < 0)
+      barShift = 0;
+
+   // Scan confirmed bars (shift 1 to barShift) for highest/lowest
+   // Start from open price as baseline
+   g_trailHighest = g_posOpenPrice;
+   g_trailLowest  = g_posOpenPrice;
+
+   for(int s = 1; s <= barShift; s++)
+   {
+      double h = iHigh(_Symbol, PERIOD_M5, s);
+      double l = iLow(_Symbol, PERIOD_M5, s);
+      if(h > g_trailHighest) g_trailHighest = h;
+      if(l < g_trailLowest)  g_trailLowest  = l;
+   }
+
+   // Zero out the unused tracker
+   if(g_posDir == 1)
+      g_trailLowest = 0;
+   else
+      g_trailHighest = 0;
+
+   if(LogLevel >= SS_LOG_DEBUG && barShift > 0)
+      Print("[SS] Trail trackers reconstructed from ", barShift, " M5 bars. ",
+            (g_posDir == 1) ? "Highest=" + DoubleToString(g_trailHighest, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS))
+                            : "Lowest="  + DoubleToString(g_trailLowest, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
 }
 
 //+------------------------------------------------------------------+

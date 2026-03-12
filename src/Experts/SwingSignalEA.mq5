@@ -77,6 +77,8 @@ input int               MaxSpreadPoints        = 0;              // Max Spread (
 input bool              EnableAlert            = true;           // Alert on entry/exit
 input bool              EnablePush             = true;           // Push notification
 input bool              EnableEmail            = false;          // Email notification
+input bool              EnableSound            = false;          // Sound notification
+input string            SoundFile              = "alert.wav";    // Sound file name
 
 // === G10: Logging ===
 input ENUM_SS_LOG_LEVEL LogLevel               = SS_LOG_NORMAL;  // Log Level
@@ -1017,6 +1019,12 @@ void SendNotification_SS(string msg)
 
    if(EnableEmail && !isTester)
       SendMail("SwingSignalEA", msg);
+
+   if(EnableSound && !isTester)
+   {
+      if(!PlaySound(SoundFile))
+         Print("[NOTIFY] Sound file not found: ", SoundFile);
+   }
 }
 
 //+------------------------------------------------------------------+

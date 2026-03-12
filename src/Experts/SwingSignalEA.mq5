@@ -82,8 +82,6 @@ input int               TradeHourEnd           = 21;             // Trading End 
 // === G8: Spread Filter ===
 input int               MaxSpreadPoints        = 0;              // Max Spread (points, 0=unlimited)
 
-// 
-input int               MagicNumber            = 0;                          // Magic Number
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
@@ -113,6 +111,9 @@ double g_trailLowest  = 0;  // Lowest price since entry (for short trailing)
 
 // Tester flag (set once in OnInit)
 bool g_isTester = false;
+
+// GlobalVariable key for position ticket persistence
+string g_gvKey = "";
 
 // Logging
 int    g_logFileHandle = INVALID_HANDLE;
@@ -155,10 +156,14 @@ int OnInit()
    g_h1Regime  = 0;
    g_h1RegimeReady = false;
 
-   // Check for existing position
+   // Build GlobalVariable key for position ticket persistence
+   g_gvKey = (InstanceTag != "") ? "SS_" + InstanceTag + "_" + _Symbol
+                                 : "SS_" + _Symbol;
+
+   // Check for existing position (GV ticket reference)
    FindOwnPosition();
 
-   Print("[SS] SwingSignalEA initialized. Magic=", MagicNumber);
+   Print("[SS] SwingSignalEA initialized. GV=", g_gvKey);
    UpdatePanel();
    return INIT_SUCCEEDED;
 }
@@ -202,7 +207,7 @@ void OnTick()
       // Exit 4: H1 regime end → immediate close
       // Skip on first regime calculation after init (wasReady=false)
       // to avoid closing existing positions due to uninitialized state
-      if(wasReady && g_posTicket > 0)
+      if(wasReady && g_posTicket > 0 && EnableTrading)
       {
          if((g_posDir == 1 && g_h1Regime != 1) ||
             (g_posDir == -1 && g_h1Regime != -1))
@@ -215,7 +220,7 @@ void OnTick()
    //--- 3. Position management
    if(g_posTicket > 0)
    {
-      // Check if position still exists
+      // Check if position still exists (state tracking only, no server ops)
       if(!PositionSelectByTicket(g_posTicket))
       {
          // Position closed externally (TP/SL hit or manual)
@@ -223,9 +228,9 @@ void OnTick()
          ResetPositionState();
          // Fall through to entry logic (position may have been closed)
       }
-      else
+      else if(EnableTrading)
       {
-         // ATR Trailing Stop (Exit 2)
+         // ATR Trailing Stop (Exit 2) — only when trading enabled
          UpdateTrailingStop();
       }
    }
@@ -684,7 +689,7 @@ void ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
    request.price     = price;
    request.sl        = sl;
    request.tp        = tp;
-   request.magic     = MagicNumber;
+   request.magic     = 0;
    request.comment   = comment;
    request.deviation = 10;
    request.type_filling = GetFillingMode();
@@ -705,8 +710,14 @@ void ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
       return;
    }
 
-   // Temporary: store deal ticket; overwritten by FindOwnPosition() below with position ticket
-   g_posTicket    = result.deal;
+   // Resolve position ticket from deal ticket (they differ in MT5)
+   ulong posTicket = 0;
+   if(HistoryDealSelect(result.deal))
+      posTicket = (ulong)HistoryDealGetInteger(result.deal, DEAL_POSITION_ID);
+   if(posTicket == 0)
+      posTicket = result.order;  // fallback
+
+   g_posTicket    = posTicket;
    g_posDir       = direction;
    g_posOpenPrice = result.price > 0 ? result.price : price;
 
@@ -722,8 +733,12 @@ void ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
       g_trailHighest = 0;
    }
 
-   // Find position ticket (deal ticket != position ticket)
-   FindOwnPosition();
+   // Persist ticket in GlobalVariable for restart recovery
+   if(g_posTicket > 0)
+   {
+      GlobalVariableSet(g_gvKey, (double)g_posTicket);
+      GlobalVariablesFlush();
+   }
 
    string dirStr = (direction == 1) ? "BUY" : "SELL";
    string msg = StringFormat("[SS_ENTRY] %s  %s | %s | %."+IntegerToString(digits)+"f | SL=%."+IntegerToString(digits)+"f | TP=%."+IntegerToString(digits)+"f | Lot=%.2f",
@@ -840,7 +855,7 @@ void ClosePosition(string reason)
    request.type         = closeType;
    request.price        = price;
    request.position     = g_posTicket;
-   request.magic        = MagicNumber;
+   request.magic        = 0;
    request.deviation    = 10;
    request.type_filling = GetFillingMode();
 
@@ -850,28 +865,31 @@ void ClosePosition(string reason)
       return;
    }
 
-   if(result.retcode == TRADE_RETCODE_DONE)
+   if(result.retcode != TRADE_RETCODE_DONE)
    {
-      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-      double profitPts = 0;
-      double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-      if(point > 0)
-      {
-         if(g_posDir == 1)
-            profitPts = (price - openPrice) / point;
-         else
-            profitPts = (openPrice - price) / point;
-      }
-
-      string dirStr = (g_posDir == 1) ? "BUY" : "SELL";
-      string msg = StringFormat("[SS_EXIT] %s  %s | %s | %."+IntegerToString(digits)+"f | Profit=%+.0fpoints | Reason=%s",
-                                dirStr, TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
-                                _Symbol, price, profitPts, reason);
-
-      Print(msg);
-      SendNotification_SS(msg);
-      LogEvent("EXIT", g_posDir, price, 0, 0, 0, "Reason=" + reason);
+      Print("[SS] Close rejected: ", result.retcode, " Reason=", reason);
+      return;  // Position still alive — do NOT reset state or clear GV
    }
+
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   double profitPts = 0;
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(point > 0)
+   {
+      if(g_posDir == 1)
+         profitPts = (price - openPrice) / point;
+      else
+         profitPts = (openPrice - price) / point;
+   }
+
+   string dirStr = (g_posDir == 1) ? "BUY" : "SELL";
+   string msg = StringFormat("[SS_EXIT] %s  %s | %s | %."+IntegerToString(digits)+"f | Profit=%+.0fpoints | Reason=%s",
+                             dirStr, TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
+                             _Symbol, price, profitPts, reason);
+
+   Print(msg);
+   SendNotification_SS(msg);
+   LogEvent("EXIT", g_posDir, price, 0, 0, 0, "Reason=" + reason);
 
    ResetPositionState();
 }
@@ -896,10 +914,9 @@ void DetectExitReason()
       ulong dealTicket = HistoryDealGetTicket(i);
       if(dealTicket == 0) continue;
 
-      long dealMagic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
-      string dealSymbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
-
-      if(dealMagic != MagicNumber || dealSymbol != _Symbol)
+      // Match by position ticket
+      ulong dealPosId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+      if(dealPosId != g_posTicket)
          continue;
 
       long dealReason = HistoryDealGetInteger(dealTicket, DEAL_REASON);
@@ -952,27 +969,31 @@ void FindOwnPosition()
    g_posTicket = 0;
    g_posDir    = 0;
 
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   // GV-only: only manage positions whose ticket we explicitly stored
+   // No scanning, no attribute matching → zero risk of adopting foreign positions
+   if(!GlobalVariableCheck(g_gvKey))
+      return;
+
+   ulong storedTicket = (ulong)GlobalVariableGet(g_gvKey);
+   if(storedTicket == 0)
    {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0) continue;
-
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
-         continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
-         continue;
-
-      g_posTicket    = ticket;
-      g_posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-
-      long posType = PositionGetInteger(POSITION_TYPE);
-      g_posDir = (posType == POSITION_TYPE_BUY) ? 1 : -1;
-
-      // Reconstruct trailing trackers from M5 bars since position open
-      ReconstructTrailTrackers();
-
-      break;
+      GlobalVariableDel(g_gvKey);
+      return;
    }
+
+   if(!PositionSelectByTicket(storedTicket))
+   {
+      // Position no longer exists → clear GV
+      GlobalVariableDel(g_gvKey);
+      return;
+   }
+
+   g_posTicket    = storedTicket;
+   g_posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   long posType   = PositionGetInteger(POSITION_TYPE);
+   g_posDir = (posType == POSITION_TYPE_BUY) ? 1 : -1;
+
+   ReconstructTrailTrackers();
 }
 
 //+------------------------------------------------------------------+
@@ -1022,6 +1043,10 @@ void ResetPositionState()
    g_posOpenPrice = 0;
    g_trailHighest = 0;
    g_trailLowest  = 0;
+
+   // Clear persisted ticket
+   if(g_gvKey != "")
+      GlobalVariableDel(g_gvKey);
 }
 
 //+------------------------------------------------------------------+
@@ -1112,7 +1137,8 @@ void OpenLogFile()
    if(g_logFileHandle != INVALID_HANDLE)
       return;
 
-   string fileName = "SwingSignalEA_" + dateStr + "_" + _Symbol + "_M" + IntegerToString(MagicNumber) + ".tsv";
+   string tagSuffix = (InstanceTag != "") ? "_" + InstanceTag : "";
+   string fileName = "SwingSignalEA_" + dateStr + "_" + _Symbol + tagSuffix + ".tsv";
    g_logFileHandle = FileOpen(fileName, FILE_WRITE|FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ);
 
    if(g_logFileHandle == INVALID_HANDLE)

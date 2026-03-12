@@ -77,8 +77,8 @@ input int               MaxSpreadPoints        = 0;              // Max Spread (
 input bool              EnableAlert            = true;           // Alert on entry/exit
 input bool              EnablePush             = true;           // Push notification
 input bool              EnableEmail            = false;          // Email notification
-input bool              EnableSound            = false;          // Sound notification
-input string            SoundFile              = "alert.wav";    // Sound file name
+input bool              EnableSoundNotification = false;          // Sound notification
+input string            SoundFileName           = "alert.wav";    // Sound file in <MT5>/Sounds/ folder
 
 // === G10: Logging ===
 input ENUM_SS_LOG_LEVEL LogLevel               = SS_LOG_NORMAL;  // Log Level
@@ -108,6 +108,9 @@ double g_posOpenPrice = 0;
 double g_trailHighest = 0;  // Highest price since entry (for long trailing)
 double g_trailLowest  = 0;  // Lowest price since entry (for short trailing)
 
+// Tester flag (set once in OnInit)
+bool g_isTester = false;
+
 // Logging
 int    g_logFileHandle = INVALID_HANDLE;
 string g_logDate       = "";
@@ -117,6 +120,8 @@ string g_logDate       = "";
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   g_isTester = (bool)MQLInfoInteger(MQL_TESTER);
+
    ENUM_MA_METHOD maMethod = UseEMA ? MODE_EMA : MODE_SMA;
 
    g_m5EmaFastHandle = iMA(_Symbol, PERIOD_M5,  M5_EMA_Fast, 0, maMethod, PRICE_CLOSE);
@@ -586,17 +591,6 @@ double CalculateLot(double slDistance)
    if(lot < minLot) lot = 0;
    if(lot > maxLot) lot = maxLot;
 
-   // FreeMargin check
-   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-   double marginRequired = 0;
-   if(!OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, lot, SymbolInfoDouble(_Symbol, SYMBOL_ASK), marginRequired))
-      return lot;  // If calc fails, proceed anyway
-   if(marginRequired > freeMargin)
-   {
-      Print("[SS] REJECT: Insufficient free margin. Required=", marginRequired, " Free=", freeMargin);
-      return 0;
-   }
-
    return lot;
 }
 
@@ -685,7 +679,7 @@ void ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
       return;
    }
 
-   // Store position info
+   // Temporary: store deal ticket; overwritten by FindOwnPosition() below with position ticket
    g_posTicket    = result.deal;
    g_posDir       = direction;
    g_posOpenPrice = result.price > 0 ? result.price : price;
@@ -866,7 +860,7 @@ void DetectExitReason()
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
 
    // Check recent deal history
-   datetime from = TimeCurrent() - 60;
+   datetime from = TimeCurrent() - 360;
    datetime to   = TimeCurrent() + 1;
    HistorySelect(from, to);
 
@@ -1009,21 +1003,21 @@ void ResetPositionState()
 //+------------------------------------------------------------------+
 void SendNotification_SS(string msg)
 {
-   bool isTester = MQLInfoInteger(MQL_TESTER);
-
-   if(EnableAlert)
+   if(EnableAlert && !g_isTester)
       Alert(msg);
 
-   if(EnablePush && !isTester)
+   if(EnablePush && !g_isTester)
       SendNotification(msg);
 
-   if(EnableEmail && !isTester)
+   if(EnableEmail && !g_isTester)
       SendMail("SwingSignalEA", msg);
 
-   if(EnableSound && !isTester)
+   if(EnableSoundNotification && !g_isTester)
    {
-      if(!PlaySound(SoundFile))
-         Print("[NOTIFY] Sound file not found: ", SoundFile);
+      if(!FileIsExist(SoundFileName, FILE_COMMON) && !FileIsExist(SoundFileName, 0))
+         Print("[NOTIFY] Sound file not found: ", SoundFileName);
+      else
+         PlaySound(SoundFileName);
    }
 }
 

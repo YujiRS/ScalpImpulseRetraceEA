@@ -40,9 +40,18 @@ input ENUM_SS_LOT_MODE  LotMode                = SS_LOT_FIXED;              // L
 input double            FixedLot               = 0.01;                      // Fixed Lot
 input double            RiskPercent            = 1.0;                        // Risk % (of equity)
 input double            MinMarginLevel         = 1500;                       // Min margin level after entry (%, 0=off)
-input int               MagicNumber            = 20260312;                   // Magic Number
-input ENUM_REVERSE_MODE ReverseMode            = REVERSE_CLOSE_AND_OPEN;    // Reverse Mode
 input string            InstanceTag            = "";                         // Instance Tag (comment)
+input ENUM_REVERSE_MODE ReverseMode            = REVERSE_CLOSE_AND_OPEN;    // Reverse Mode
+
+// === G9: Notification ===
+input bool              EnableAlert            = true;           // Alert on entry/exit
+input bool              EnablePush             = true;           // Push notification
+input bool              EnableEmail            = false;          // Email notification
+input bool              EnableSoundNotification = false;          // Sound notification
+input string            SoundFileName           = "alert.wav";    // Sound file in <MT5>/Sounds/ folder
+
+// === G10: Logging ===
+input ENUM_SS_LOG_LEVEL LogLevel               = SS_LOG_DEBUG;  // Log Level
 
 // === G2: M5 EMA (Trigger) ===
 input int               M5_EMA_Fast            = 13;             // M5 EMA Fast Period
@@ -73,15 +82,8 @@ input int               TradeHourEnd           = 21;             // Trading End 
 // === G8: Spread Filter ===
 input int               MaxSpreadPoints        = 0;              // Max Spread (points, 0=unlimited)
 
-// === G9: Notification ===
-input bool              EnableAlert            = true;           // Alert on entry/exit
-input bool              EnablePush             = true;           // Push notification
-input bool              EnableEmail            = false;          // Email notification
-input bool              EnableSoundNotification = false;          // Sound notification
-input string            SoundFileName           = "alert.wav";    // Sound file in <MT5>/Sounds/ folder
-
-// === G10: Logging ===
-input ENUM_SS_LOG_LEVEL LogLevel               = SS_LOG_NORMAL;  // Log Level
+// 
+input int               MagicNumber            = 0;                          // Magic Number
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |

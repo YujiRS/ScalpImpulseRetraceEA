@@ -712,8 +712,14 @@ void ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
       return;
    }
 
-   // Temporary: store deal ticket; overwritten by FindOwnPosition() below with position ticket
-   g_posTicket    = result.deal;
+   // Resolve position ticket from deal ticket (they differ in MT5)
+   ulong posTicket = 0;
+   if(HistoryDealSelect(result.deal))
+      posTicket = (ulong)HistoryDealGetInteger(result.deal, DEAL_POSITION_ID);
+   if(posTicket == 0)
+      posTicket = result.order;  // fallback
+
+   g_posTicket    = posTicket;
    g_posDir       = direction;
    g_posOpenPrice = result.price > 0 ? result.price : price;
 
@@ -728,9 +734,6 @@ void ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
       g_trailLowest  = g_posOpenPrice;
       g_trailHighest = 0;
    }
-
-   // Find position ticket (deal ticket != position ticket)
-   FindOwnPosition();
 
    // Persist ticket in GlobalVariable for restart recovery
    if(g_posTicket > 0)
@@ -864,28 +867,31 @@ void ClosePosition(string reason)
       return;
    }
 
-   if(result.retcode == TRADE_RETCODE_DONE)
+   if(result.retcode != TRADE_RETCODE_DONE)
    {
-      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-      double profitPts = 0;
-      double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-      if(point > 0)
-      {
-         if(g_posDir == 1)
-            profitPts = (price - openPrice) / point;
-         else
-            profitPts = (openPrice - price) / point;
-      }
-
-      string dirStr = (g_posDir == 1) ? "BUY" : "SELL";
-      string msg = StringFormat("[SS_EXIT] %s  %s | %s | %."+IntegerToString(digits)+"f | Profit=%+.0fpoints | Reason=%s",
-                                dirStr, TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
-                                _Symbol, price, profitPts, reason);
-
-      Print(msg);
-      SendNotification_SS(msg);
-      LogEvent("EXIT", g_posDir, price, 0, 0, 0, "Reason=" + reason);
+      Print("[SS] Close rejected: ", result.retcode, " Reason=", reason);
+      return;  // Position still alive — do NOT reset state or clear GV
    }
+
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   double profitPts = 0;
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(point > 0)
+   {
+      if(g_posDir == 1)
+         profitPts = (price - openPrice) / point;
+      else
+         profitPts = (openPrice - price) / point;
+   }
+
+   string dirStr = (g_posDir == 1) ? "BUY" : "SELL";
+   string msg = StringFormat("[SS_EXIT] %s  %s | %s | %."+IntegerToString(digits)+"f | Profit=%+.0fpoints | Reason=%s",
+                             dirStr, TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
+                             _Symbol, price, profitPts, reason);
+
+   Print(msg);
+   SendNotification_SS(msg);
+   LogEvent("EXIT", g_posDir, price, 0, 0, 0, "Reason=" + reason);
 
    ResetPositionState();
 }

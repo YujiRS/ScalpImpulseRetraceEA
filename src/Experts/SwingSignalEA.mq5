@@ -82,8 +82,6 @@ input int               TradeHourEnd           = 21;             // Trading End 
 // === G8: Spread Filter ===
 input int               MaxSpreadPoints        = 0;              // Max Spread (points, 0=unlimited)
 
-// 
-input int               MagicNumber            = 55001;                      // Magic Number
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
@@ -114,7 +112,7 @@ double g_trailLowest  = 0;  // Lowest price since entry (for short trailing)
 // Tester flag (set once in OnInit)
 bool g_isTester = false;
 
-// GlobalVariable key for position ticket persistence (replaces MagicNumber-based identification)
+// GlobalVariable key for position ticket persistence
 string g_gvKey = "";
 
 // Logging
@@ -162,10 +160,10 @@ int OnInit()
    g_gvKey = (InstanceTag != "") ? "SS_" + InstanceTag + "_" + _Symbol
                                  : "SS_" + _Symbol;
 
-   // Check for existing position (uses GV + comment, not MagicNumber)
+   // Check for existing position (GV ticket reference)
    FindOwnPosition();
 
-   Print("[SS] SwingSignalEA initialized. Magic=", MagicNumber);
+   Print("[SS] SwingSignalEA initialized. GV=", g_gvKey);
    UpdatePanel();
    return INIT_SUCCEEDED;
 }
@@ -691,7 +689,7 @@ void ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
    request.price     = price;
    request.sl        = sl;
    request.tp        = tp;
-   request.magic     = MagicNumber;
+   request.magic     = 0;
    request.comment   = comment;
    request.deviation = 10;
    request.type_filling = GetFillingMode();
@@ -857,7 +855,7 @@ void ClosePosition(string reason)
    request.type         = closeType;
    request.price        = price;
    request.position     = g_posTicket;
-   request.magic        = MagicNumber;
+   request.magic        = 0;
    request.deviation    = 10;
    request.type_filling = GetFillingMode();
 
@@ -916,10 +914,9 @@ void DetectExitReason()
       ulong dealTicket = HistoryDealGetTicket(i);
       if(dealTicket == 0) continue;
 
-      long dealMagic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
-      string dealSymbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
-
-      if(dealMagic != MagicNumber || dealSymbol != _Symbol)
+      // Match by position ticket
+      ulong dealPosId = (ulong)HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+      if(dealPosId != g_posTicket)
          continue;
 
       long dealReason = HistoryDealGetInteger(dealTicket, DEAL_REASON);
@@ -1140,7 +1137,8 @@ void OpenLogFile()
    if(g_logFileHandle != INVALID_HANDLE)
       return;
 
-   string fileName = "SwingSignalEA_" + dateStr + "_" + _Symbol + "_M" + IntegerToString(MagicNumber) + ".tsv";
+   string tagSuffix = (InstanceTag != "") ? "_" + InstanceTag : "";
+   string fileName = "SwingSignalEA_" + dateStr + "_" + _Symbol + tagSuffix + ".tsv";
    g_logFileHandle = FileOpen(fileName, FILE_WRITE|FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ);
 
    if(g_logFileHandle == INVALID_HANDLE)

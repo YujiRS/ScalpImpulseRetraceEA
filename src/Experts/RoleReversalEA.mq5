@@ -86,7 +86,6 @@ input bool              EnableStatusPanel      = true;           // On-chart sta
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
 ENUM_RR_STATE g_state = RR_IDLE;
-int           g_magic = 0;
 
 // Indicator handles
 int           g_emaM5Handle = INVALID_HANDLE;
@@ -268,9 +267,11 @@ bool LoadStateFromTFChange()
 //+------------------------------------------------------------------+
 void ClearSavedState()
 {
+   // "ticket" is NOT cleared here — it is managed independently
+   // (set by ExecuteEntry, cleared by ManagePosition on close)
    string keys[] = {"state", "boPrice", "boDir", "boBar", "confCnt",
                      "m5Cnt", "lastM5", "lastH1", "h1Ref", "confirm",
-                     "ticket", "brokenCnt"};
+                     "brokenCnt"};
    for(int i = 0; i < ArraySize(keys); i++)
       GlobalVariableDel(RR_GVKey(keys[i]));
 
@@ -291,8 +292,6 @@ void ClearSavedState()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   g_magic = 0;
-
    // Create indicator handles
    g_emaM5Handle = iMA(Symbol(), PERIOD_M5, EMA_Period, 0, MODE_EMA, PRICE_CLOSE);
    g_atrM5Handle = iATR(Symbol(), PERIOD_M5, 14);
@@ -1018,7 +1017,7 @@ bool ExecuteEntry(int direction, double sl, double tp, ENUM_CONFIRM_PATTERN conf
    request.sl = NormalizeDouble(sl, _Digits);
    request.tp = NormalizeDouble(tp, _Digits);
    request.deviation = 20;
-   request.magic = g_magic;
+   request.magic = 0;
    request.comment = "RR" + (InstanceTag != "" ? "[" + InstanceTag + "]" : "") + "_" + ConfirmPatternName(confirm);
 
    // Filling mode
@@ -1038,9 +1037,20 @@ bool ExecuteEntry(int direction, double sl, double tp, ENUM_CONFIRM_PATTERN conf
 
    if(result.retcode == TRADE_RETCODE_DONE || result.retcode == TRADE_RETCODE_PLACED)
    {
-      g_posTicket = result.order;
+      // Resolve position ticket via DEAL_POSITION_ID
+      ulong posTicket = 0;
+      if(result.deal != 0 && HistoryDealSelect(result.deal))
+         posTicket = (ulong)HistoryDealGetInteger(result.deal, DEAL_POSITION_ID);
+      if(posTicket == 0)
+         posTicket = result.order;  // fallback
+
+      g_posTicket = posTicket;
       g_posSL = sl;
       g_posTP = tp;
+
+      // Persist ticket to GV for crash/restart resilience
+      GlobalVariableSet(RR_GVKey("ticket"), (double)g_posTicket);
+      GlobalVariablesFlush();
       return true;
    }
 
@@ -1117,6 +1127,7 @@ void ManagePosition()
    {
       Print("Position closed externally or by SL/TP");
       RR_WriteLog(RR_LOG_EXIT, 0, 0, 0, 0, 0, "", "CLOSED_EXTERNALLY_OR_SLTP");
+      GlobalVariableDel(RR_GVKey("ticket"));
       g_state = RR_COOLDOWN;
       g_posTicket = 0;
       ResetState();
@@ -1125,25 +1136,28 @@ void ManagePosition()
 }
 
 //+------------------------------------------------------------------+
-//| Check if we have an existing position with our magic              |
+//| Check if we have an existing position (GV-only, no scanning)      |
 //+------------------------------------------------------------------+
 bool CheckExistingPosition()
 {
    g_posTicket = 0;
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   if(!GlobalVariableCheck(RR_GVKey("ticket")))
+      return false;
+   ulong storedTicket = (ulong)GlobalVariableGet(RR_GVKey("ticket"));
+   if(storedTicket == 0)
    {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) == g_magic &&
-         PositionGetString(POSITION_SYMBOL) == Symbol())
-      {
-         g_posTicket = ticket;
-         g_posSL = PositionGetDouble(POSITION_SL);
-         g_posTP = PositionGetDouble(POSITION_TP);
-         return true;
-      }
+      GlobalVariableDel(RR_GVKey("ticket"));
+      return false;
    }
-   return false;
+   if(!PositionSelectByTicket(storedTicket))
+   {
+      GlobalVariableDel(RR_GVKey("ticket"));
+      return false;
+   }
+   g_posTicket = storedTicket;
+   g_posSL = PositionGetDouble(POSITION_SL);
+   g_posTP = PositionGetDouble(POSITION_TP);
+   return true;
 }
 
 //+------------------------------------------------------------------+

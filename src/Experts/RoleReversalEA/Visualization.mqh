@@ -265,29 +265,21 @@ void UpdateChartStatusPanel()
    // --- Position Info ---
    if(g_state == RR_IN_POSITION && g_posTicket > 0)
    {
-      bool found = false;
-      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      if(PositionSelectByTicket(g_posTicket))
       {
-         ulong ticket = PositionGetTicket(i);
-         if(PositionGetInteger(POSITION_MAGIC) == g_magic &&
-            PositionGetString(POSITION_SYMBOL) == Symbol())
-         {
-            double profit = PositionGetDouble(POSITION_PROFIT);
-            double posPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-            double posSL = PositionGetDouble(POSITION_SL);
-            double posTP = PositionGetDouble(POSITION_TP);
-            color plClr = (profit >= 0) ? clrLime : clrOrangeRed;
+         double profit = PositionGetDouble(POSITION_PROFIT);
+         double posPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         double posSL = PositionGetDouble(POSITION_SL);
+         double posTP = PositionGetDouble(POSITION_TP);
+         color plClr = (profit >= 0) ? clrLime : clrOrangeRed;
 
-            PanelSetLine(r++, "P/L      : " + DoubleToString(profit, 2), plClr);
-            PanelSetLine(r++, "TP       : " + DoubleToString(posTP, digits));
-            PanelSetLine(r++, "SL       : " + DoubleToString(posSL, digits));
-            PanelSetLine(r++, "Entry    : " + DoubleToString(posPrice, digits));
-            PanelSetLine(r++, "Confirm  : " + ConfirmPatternName(g_lastConfirm), clrYellow);
-            found = true;
-            break;
-         }
+         PanelSetLine(r++, "P/L      : " + DoubleToString(profit, 2), plClr);
+         PanelSetLine(r++, "TP       : " + DoubleToString(posTP, digits));
+         PanelSetLine(r++, "SL       : " + DoubleToString(posSL, digits));
+         PanelSetLine(r++, "Entry    : " + DoubleToString(posPrice, digits));
+         PanelSetLine(r++, "Confirm  : " + ConfirmPatternName(g_lastConfirm), clrYellow);
       }
-      if(!found)
+      else
          PanelSetLine(r++, "Position : LOST", clrOrangeRed);
    }
 

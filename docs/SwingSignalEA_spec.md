@@ -207,7 +207,7 @@ H1 EMA 位置関係が逆転 → **無条件で即決済**。
 | G9: Notification | EnableAlert | true | Alert 通知 |
 | | EnablePush | true | Push 通知 |
 | | EnableEmail | false | Email 通知 |
-| G10: Logging | LogLevel | SS_LOG_NORMAL | ログレベル |
+| G10: Logging | LogLevel | SS_LOG_ANALYZE | ログレベル |
 
 ---
 
@@ -216,7 +216,7 @@ H1 EMA 位置関係が逆転 → **無条件で即決済**。
 ```
 ENUM_SS_LOT_MODE:  SS_LOT_FIXED(0), SS_LOT_RISK_PERCENT(1)
 ENUM_REVERSE_MODE: REVERSE_CLOSE_AND_OPEN(0), REVERSE_IGNORE(1)
-ENUM_SS_LOG_LEVEL: SS_LOG_NORMAL(0), SS_LOG_DEBUG(1)
+ENUM_SS_LOG_LEVEL: SS_LOG_OFF(0), SS_LOG_NORMAL(1), SS_LOG_ANALYZE(2)
 ```
 
 ---
@@ -233,17 +233,148 @@ ENUM_SS_LOG_LEVEL: SS_LOG_NORMAL(0), SS_LOG_DEBUG(1)
 [SS_EXIT] BUY  2026.03.12 16:30 | XAUUSD | 2720.00 | Profit=+200points | Reason=ATR_TRAIL
 ```
 
-Reason: `TP_HIT`, `SL_HIT`, `ATR_TRAIL`, `H1_REGIME_END`, `REVERSE`, `EXTERNAL`
+ExitReason 語彙: `TP_HIT`, `SL_HIT`, `ATR_TRAIL`, `H1_REGIME_END`, `REVERSE`, `EXTERNAL`
 
 ---
 
-## TSV ログ（DEBUG 時）
+## ログ仕様
 
-ファイル: `MQL5/Files/SwingSignalEA_<YYYYMMDD>_<Symbol>_M<MagicNumber>.tsv`
+### 設計思想
 
-カラム: `Time | Symbol | Event | Direction | Price | SL | TP | ATR | H1_Fast | H1_Slow | M5_Fast | M5_Slow | Detail`
+ログの目的は **パラメータ最適化の材料** を提供すること。単なるトレード履歴（ブローカーで取得可能）ではなく、**判断時点のコンテキスト** を記録する。
 
-Event: `ENTRY`, `EXIT`, `REJECT`, `TRAIL_UPDATE`, `REGIME_CHANGE`
+- **Signal Log**: 全 M5 クロスシグナルの判断スナップショット（「なぜ入らなかったか」の完全記録）
+- **Trade Log**: トレードライフサイクル全体を1行で記録（MFE/MAE による SL/TP 最適化）
+
+### LogLevel
+
+| 値 | 名前 | 出力 |
+|---|---|---|
+| 0 | SS_LOG_OFF | ファイル出力なし |
+| 1 | SS_LOG_NORMAL | Trade Log のみ |
+| 2 | SS_LOG_ANALYZE | Trade Log + Signal Log（デフォルト） |
+
+### Signal Log（ANALYZE 時）
+
+M5 EMA クロス発生ごとに1行。全フィルターの値と判定結果を記録。
+
+**ファイル名**: `MQL5/Files/SS_SIGNAL_<YYYYMMDD>_<Symbol>[_<InstanceTag>].tsv`
+
+**カラム（30列）:**
+
+| # | カラム | 型 | 説明 |
+|---|---|---|---|
+| 1 | Time | datetime | シグナル発生時刻 |
+| 2 | Symbol | string | 銘柄 |
+| 3 | Dir | string | `BUY` / `SELL` |
+| 4 | Outcome | string | 判定結果（Outcome 語彙参照） |
+| 5 | Price | double | シグナル時の Ask/Bid |
+| 6 | ATR | double | M5 ATR(14) 値 |
+| 7 | SpreadPts | int | スプレッド（points） |
+| 8 | M5Fast | double | M5 EMA Fast 値 |
+| 9 | M5Slow | double | M5 EMA Slow 値 |
+| 10 | M5CrossGap | double | \|M5Fast - M5Slow\|（クロス強度） |
+| 11 | M5SlopeFast | double | EMA Fast スロープ（shift[1] - shift[2]） |
+| 12 | M5SlopeSlow | double | EMA Slow スロープ |
+| 13 | H1Regime | string | `LONG` / `SHORT` / `NEUTRAL` |
+| 14 | H1Fast | double | H1 EMA Fast 値 |
+| 15 | H1Slow | double | H1 EMA Slow 値 |
+| 16 | SL | double | 算出 SL 価格（0=未算出） |
+| 17 | TP | double | 算出 TP 価格（0=未算出） |
+| 18 | SL_DistPts | double | SL 距離（points） |
+| 19 | TP_DistPts | double | TP 距離（points） |
+| 20 | RR | double | Reward:Risk 比 |
+| 21 | SwingTP | double | H1 Swing TP 生値（0=見つからず） |
+| 22 | FallbackUsed | bool | 1=MinRR フォールバック使用 |
+| 23 | Lot | double | 算出ロット |
+| 24 | ServerHour | int | サーバー時刻（時） |
+| 25 | PassRegime | bool | H1 レジームフィルター通過 |
+| 26 | PassSlope | bool | M5 スロープフィルター通過 |
+| 27 | PassTime | bool | 時間フィルター通過 |
+| 28 | PassSpread | bool | スプレッドフィルター通過 |
+| 29 | PassSLWidth | bool | SL 幅チェック通過 |
+| 30 | PassMargin | bool | 証拠金チェック通過 |
+
+**Outcome 語彙（固定）:**
+
+```
+ENTRY              -- 全フィルター通過、エントリー執行
+REJECT_REGIME      -- H1 レジーム不一致
+REJECT_SLOPE       -- M5 スロープフィルター不成立
+REJECT_TIME        -- 取引時間外
+REJECT_SPREAD      -- スプレッド超過
+REJECT_SAME_POS    -- 同方向ポジション保有中
+REJECT_REVERSE_IGN -- 逆方向ポジション保有中（REVERSE_IGNORE 設定）
+REJECT_ATR         -- ATR 取得不可
+REJECT_SL_CALC     -- SL 算出不可
+REJECT_SL_WIDE     -- SL 幅が MaxSL_ATR × ATR 超過
+REJECT_NO_TP       -- TP 算出不可
+REJECT_NO_LOT      -- ロット算出不可
+REJECT_MARGIN      -- 証拠金不足
+REJECT_SEND        -- OrderSend 失敗
+```
+
+### Trade Log（NORMAL 以上）
+
+ポジション完結ごとに1行。Entry→Exit のライフサイクルを記録。
+
+**ファイル名**: `MQL5/Files/SS_TRADE_<YYYYMMDD>_<Symbol>[_<InstanceTag>].tsv`
+
+**カラム（20列）:**
+
+| # | カラム | 型 | 説明 |
+|---|---|---|---|
+| 1 | EntryTime | datetime | エントリー時刻 |
+| 2 | ExitTime | datetime | 決済時刻 |
+| 3 | Symbol | string | 銘柄 |
+| 4 | Dir | string | `BUY` / `SELL` |
+| 5 | EntryPrice | double | 約定価格 |
+| 6 | ExitPrice | double | 決済価格 |
+| 7 | Lot | double | ロット |
+| 8 | SL_Initial | double | 初期 SL |
+| 9 | SL_Final | double | 最終 SL（トレーリング後） |
+| 10 | TP | double | TP 価格 |
+| 11 | ProfitPts | double | 損益（points） |
+| 12 | ProfitMoney | double | 損益（口座通貨） |
+| 13 | HoldBarsM5 | int | 保有 M5 バー数 |
+| 14 | ExitReason | string | 決済理由（ExitReason 語彙参照） |
+| 15 | TrailCount | int | トレーリング SL 更新回数 |
+| 16 | ATR_Entry | double | エントリー時 ATR |
+| 17 | SpreadEntry | int | エントリー時スプレッド |
+| 18 | H1Regime_Entry | string | エントリー時 H1 レジーム |
+| 19 | MFE_Pts | double | 最大有利到達幅（points） |
+| 20 | MAE_Pts | double | 最大不利到達幅（points） |
+
+**ExitReason 語彙（固定）:**
+
+```
+TP_HIT          -- TP 到達
+SL_HIT          -- 初期 SL ヒット
+ATR_TRAIL       -- トレーリング SL ヒット
+H1_REGIME_END   -- H1 レジーム消滅
+REVERSE         -- 逆方向シグナルによるドテン
+EXTERNAL        -- 外部決済（手動等）
+```
+
+### 解析ユースケース
+
+| 分析目的 | 使用ログ | 着目カラム |
+|---|---|---|
+| フィルター通過率 | Signal Log | PassRegime〜PassMargin の集計 |
+| 時間帯別勝率 | Signal Log + Trade Log | ServerHour × Outcome / ExitReason |
+| SL/TP 最適化 | Trade Log | MFE_Pts / MAE_Pts / ProfitPts |
+| スロープ閾値検討 | Signal Log | M5SlopeFast/Slow × Outcome |
+| スプレッド影響 | Signal Log | SpreadPts × Outcome |
+| トレーリング効果 | Trade Log | TrailCount / SL_Initial vs SL_Final |
+| クロス強度と勝率 | Signal Log + Trade Log | M5CrossGap × 結果 |
+| H1 Swing TP 有効性 | Signal Log + Trade Log | SwingTP / FallbackUsed × ProfitPts |
+
+### リスタート時の制約
+
+EA 再起動時、以下の Trade Log カラムは復元不可能（0 で記録）:
+- `ATR_Entry`, `SpreadEntry`: エントリー時のスナップショットが消失
+- `TrailCount`: トレーリング更新回数がリセット
+- `SL_Initial`: 現在の SL で近似（トレーリング済みの場合は正確でない）
 
 ---
 

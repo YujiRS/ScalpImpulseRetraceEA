@@ -114,6 +114,9 @@ double g_trailLowest  = 0;  // Lowest price since entry (for short trailing)
 // Tester flag (set once in OnInit)
 bool g_isTester = false;
 
+// GlobalVariable key for position ticket persistence (replaces MagicNumber-based identification)
+string g_gvKey = "";
+
 // Logging
 int    g_logFileHandle = INVALID_HANDLE;
 string g_logDate       = "";
@@ -155,11 +158,11 @@ int OnInit()
    g_h1Regime  = 0;
    g_h1RegimeReady = false;
 
-   // Warn if MagicNumber is 0 (may pick up manual / other-EA positions)
-   if(MagicNumber == 0)
-      Print("[SS] WARNING: MagicNumber=0 — may manage positions not opened by this EA");
+   // Build GlobalVariable key for position ticket persistence
+   g_gvKey = (InstanceTag != "") ? "SS_" + InstanceTag + "_" + _Symbol
+                                 : "SS_" + _Symbol;
 
-   // Check for existing position
+   // Check for existing position (uses GV + comment, not MagicNumber)
    FindOwnPosition();
 
    Print("[SS] SwingSignalEA initialized. Magic=", MagicNumber);
@@ -206,7 +209,7 @@ void OnTick()
       // Exit 4: H1 regime end → immediate close
       // Skip on first regime calculation after init (wasReady=false)
       // to avoid closing existing positions due to uninitialized state
-      if(wasReady && g_posTicket > 0)
+      if(wasReady && g_posTicket > 0 && EnableTrading)
       {
          if((g_posDir == 1 && g_h1Regime != 1) ||
             (g_posDir == -1 && g_h1Regime != -1))
@@ -219,7 +222,7 @@ void OnTick()
    //--- 3. Position management
    if(g_posTicket > 0)
    {
-      // Check if position still exists
+      // Check if position still exists (state tracking only, no server ops)
       if(!PositionSelectByTicket(g_posTicket))
       {
          // Position closed externally (TP/SL hit or manual)
@@ -227,9 +230,9 @@ void OnTick()
          ResetPositionState();
          // Fall through to entry logic (position may have been closed)
       }
-      else
+      else if(EnableTrading)
       {
-         // ATR Trailing Stop (Exit 2)
+         // ATR Trailing Stop (Exit 2) — only when trading enabled
          UpdateTrailingStop();
       }
    }
@@ -729,6 +732,13 @@ void ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
    // Find position ticket (deal ticket != position ticket)
    FindOwnPosition();
 
+   // Persist ticket in GlobalVariable for restart recovery
+   if(g_posTicket > 0)
+   {
+      GlobalVariableSet(g_gvKey, (double)g_posTicket);
+      GlobalVariablesFlush();
+   }
+
    string dirStr = (direction == 1) ? "BUY" : "SELL";
    string msg = StringFormat("[SS_ENTRY] %s  %s | %s | %."+IntegerToString(digits)+"f | SL=%."+IntegerToString(digits)+"f | TP=%."+IntegerToString(digits)+"f | Lot=%.2f",
                              dirStr, TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
@@ -956,27 +966,31 @@ void FindOwnPosition()
    g_posTicket = 0;
    g_posDir    = 0;
 
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   // GV-only: only manage positions whose ticket we explicitly stored
+   // No scanning, no attribute matching → zero risk of adopting foreign positions
+   if(!GlobalVariableCheck(g_gvKey))
+      return;
+
+   ulong storedTicket = (ulong)GlobalVariableGet(g_gvKey);
+   if(storedTicket == 0)
    {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0) continue;
-
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
-         continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
-         continue;
-
-      g_posTicket    = ticket;
-      g_posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-
-      long posType = PositionGetInteger(POSITION_TYPE);
-      g_posDir = (posType == POSITION_TYPE_BUY) ? 1 : -1;
-
-      // Reconstruct trailing trackers from M5 bars since position open
-      ReconstructTrailTrackers();
-
-      break;
+      GlobalVariableDel(g_gvKey);
+      return;
    }
+
+   if(!PositionSelectByTicket(storedTicket))
+   {
+      // Position no longer exists → clear GV
+      GlobalVariableDel(g_gvKey);
+      return;
+   }
+
+   g_posTicket    = storedTicket;
+   g_posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   long posType   = PositionGetInteger(POSITION_TYPE);
+   g_posDir = (posType == POSITION_TYPE_BUY) ? 1 : -1;
+
+   ReconstructTrailTrackers();
 }
 
 //+------------------------------------------------------------------+
@@ -1026,6 +1040,10 @@ void ResetPositionState()
    g_posOpenPrice = 0;
    g_trailHighest = 0;
    g_trailLowest  = 0;
+
+   // Clear persisted ticket
+   if(g_gvKey != "")
+      GlobalVariableDel(g_gvKey);
 }
 
 //+------------------------------------------------------------------+

@@ -26,8 +26,9 @@ enum ENUM_REVERSE_MODE
 
 enum ENUM_SS_LOG_LEVEL
 {
-   SS_LOG_NORMAL  = 0,  // Print only
-   SS_LOG_DEBUG   = 1,  // TSV file log
+   SS_LOG_OFF      = 0,  // Off
+   SS_LOG_NORMAL   = 1,  // Trade log
+   SS_LOG_ANALYZE  = 2,  // Trade + Signal log
 };
 
 //+------------------------------------------------------------------+
@@ -51,7 +52,7 @@ input bool              EnableSoundNotification = false;          // Sound notif
 input string            SoundFileName           = "alert.wav";    // Sound file in <MT5>/Sounds/ folder
 
 // === G10: Logging ===
-input ENUM_SS_LOG_LEVEL LogLevel               = SS_LOG_DEBUG;  // Log Level
+input ENUM_SS_LOG_LEVEL LogLevel               = SS_LOG_ANALYZE;  // Log Level
 
 // === G2: M5 EMA (Trigger) ===
 input int               M5_EMA_Fast            = 13;             // M5 EMA Fast Period
@@ -115,9 +116,24 @@ bool g_isTester = false;
 // GlobalVariable key for position ticket persistence
 string g_gvKey = "";
 
-// Logging
-int    g_logFileHandle = INVALID_HANDLE;
-string g_logDate       = "";
+// Logging — Signal log + Trade log
+int    g_signalLogHandle = INVALID_HANDLE;
+string g_signalLogDate   = "";
+int    g_tradeLogHandle  = INVALID_HANDLE;
+string g_tradeLogDate    = "";
+
+// Trade lifecycle tracking (set at entry, used at exit for Trade log)
+datetime g_tradeEntryTime  = 0;
+double   g_tradeATR        = 0;
+long     g_tradeSpread     = 0;
+double   g_tradeSLInitial  = 0;
+double   g_tradeLastSL     = 0;
+double   g_tradeTP         = 0;
+double   g_tradeLot        = 0;
+int      g_tradeH1Regime   = 0;
+int      g_tradeTrailCount = 0;
+double   g_tradePeakHigh   = 0;
+double   g_tradePeakLow    = DBL_MAX;
 
 // Panel
 const string g_panelPrefix = "SS_Panel_";
@@ -179,7 +195,8 @@ void OnDeinit(const int reason)
    if(g_h1EmaSlowHandle != INVALID_HANDLE) IndicatorRelease(g_h1EmaSlowHandle);
    if(g_m5AtrHandle != INVALID_HANDLE)     IndicatorRelease(g_m5AtrHandle);
 
-   CloseLogFile();
+   CloseSignalLog();
+   CloseTradeLog();
    DeletePanel();
 }
 
@@ -228,10 +245,16 @@ void OnTick()
          ResetPositionState();
          // Fall through to entry logic (position may have been closed)
       }
-      else if(EnableTrading)
+      else
       {
-         // ATR Trailing Stop (Exit 2) — only when trading enabled
-         UpdateTrailingStop();
+         // Track MFE/MAE from confirmed M5 bars
+         double m5H = iHigh(_Symbol, PERIOD_M5, 1);
+         double m5L = iLow(_Symbol, PERIOD_M5, 1);
+         if(m5H > g_tradePeakHigh) g_tradePeakHigh = m5H;
+         if(m5L < g_tradePeakLow)  g_tradePeakLow  = m5L;
+
+         if(EnableTrading)
+            UpdateTrailingStop();
       }
    }
 
@@ -244,80 +267,141 @@ void OnTick()
    if(crossSignal == 0)
       return;
 
-   // H1 direction filter
-   if(crossSignal == 1 && g_h1Regime != 1)
-      return;
-   if(crossSignal == -1 && g_h1Regime != -1)
-      return;
+   //--- Evaluate ALL filters and collect snapshot for signal log ---
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double price = (crossSignal == 1) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                                      : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   long spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   double atr = GetM5ATR();
 
-   // M5 slope filter
-   if(!CheckSlopeFilter(crossSignal))
-      return;
+   // M5 EMA values for signal log
+   double m5f[], m5s[];
+   ArraySetAsSeries(m5f, true);
+   ArraySetAsSeries(m5s, true);
+   double m5Fast = 0, m5Slow = 0, m5CrossGap = 0, m5SlopeFast = 0, m5SlopeSlow = 0;
+   if(CopyBuffer(g_m5EmaFastHandle, 0, 1, 2, m5f) >= 2 &&
+      CopyBuffer(g_m5EmaSlowHandle, 0, 1, 2, m5s) >= 2)
+   {
+      m5Fast      = m5f[0];
+      m5Slow      = m5s[0];
+      m5CrossGap  = MathAbs(m5Fast - m5Slow);
+      m5SlopeFast = m5f[0] - m5f[1];
+      m5SlopeSlow = m5s[0] - m5s[1];
+   }
 
-   // Time filter
-   if(!CheckTimeFilter())
-      return;
+   // H1 EMA values for signal log
+   double h1f[], h1s[];
+   ArraySetAsSeries(h1f, true);
+   ArraySetAsSeries(h1s, true);
+   double h1Fast = 0, h1Slow = 0;
+   if(CopyBuffer(g_h1EmaFastHandle, 0, 1, 1, h1f) >= 1) h1Fast = h1f[0];
+   if(CopyBuffer(g_h1EmaSlowHandle, 0, 1, 1, h1s) >= 1) h1Slow = h1s[0];
 
-   // Spread filter
-   if(!CheckSpreadFilter())
-      return;
+   // Server hour
+   MqlDateTime dtNow;
+   TimeCurrent(dtNow);
+   int serverHour = dtNow.hour;
 
-   // Duplicate / reverse position check
-   if(g_posTicket > 0)
+   // Filter evaluation
+   bool passRegime  = (crossSignal == g_h1Regime);
+   bool passSlope   = CheckSlopeFilter(crossSignal);
+   bool passTime    = CheckTimeFilter();
+   bool passSpread  = CheckSpreadFilter();
+   bool hasPosition = (g_posTicket > 0);
+   bool passPosCheck = true;
+   if(hasPosition)
    {
       if(g_posDir == crossSignal)
-         return;  // Same direction already held
-
-      // Opposite direction
-      if(ReverseMode == REVERSE_IGNORE)
-         return;
-
-      // REVERSE_CLOSE_AND_OPEN: close existing, then enter new
-      ClosePosition("REVERSE");
+         passPosCheck = false;
+      else if(ReverseMode == REVERSE_IGNORE)
+         passPosCheck = false;
    }
 
-   // Calculate SL
-   double atr = GetM5ATR();
-   if(atr <= 0)
-      return;
+   // SL / TP / Lot calculation (compute even if filters fail — for signal log)
+   double sl = 0, tp = 0, slDist = 0, tpDist = 0, rr = 0;
+   double swingTP = 0;
+   bool   fallbackUsed = false;
+   bool   passSLWidth  = false;
+   bool   passATR      = (atr > 0);
+   double lot = 0;
+   bool   passMargin   = true;
 
-   double sl = CalculateSL(crossSignal, atr);
-   if(sl <= 0)
-      return;
-
-   double entryPrice = (crossSignal == 1) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
-                                           : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double slDistance = MathAbs(entryPrice - sl);
-
-   // Max SL check
-   if(slDistance > MaxSL_ATR * atr)
+   if(passATR)
    {
-      LogEvent("REJECT", crossSignal, entryPrice, sl, 0, atr, "SL_TOO_WIDE");
-      return;
-   }
-
-   // Calculate TP (H1 Swing)
-   double tp = CalculateTP(crossSignal, entryPrice, slDistance);
-   if(tp <= 0)
-      return;
-
-   // Calculate lot
-   double lot = CalculateLot(slDistance);
-   if(lot <= 0)
-      return;
-
-   // Margin check
-   if(MinMarginLevel > 0)
-   {
-      if(!CheckMarginLevel(crossSignal, lot))
+      sl = CalculateSL(crossSignal, atr);
+      if(sl > 0)
       {
-         LogEvent("REJECT", crossSignal, entryPrice, sl, tp, atr, "MARGIN_LOW");
-         return;
+         slDist = MathAbs(price - sl);
+         passSLWidth = (slDist <= MaxSL_ATR * atr);
+
+         swingTP = FindH1SwingTP(crossSignal, price);
+         tp = CalculateTP(crossSignal, price, slDist);
+         fallbackUsed = (swingTP <= 0 || MathAbs(swingTP - price) < slDist * MinRR);
+
+         if(tp > 0)
+         {
+            tpDist = MathAbs(tp - price);
+            rr = (slDist > 0) ? tpDist / slDist : 0;
+         }
+
+         lot = CalculateLot(slDist);
+         if(MinMarginLevel > 0 && lot > 0)
+            passMargin = CheckMarginLevel(crossSignal, lot);
       }
    }
 
-   // Execute entry
-   ExecuteEntry(crossSignal, lot, sl, tp, atr);
+   // Convert distances to points
+   double slDistPts = (point > 0) ? slDist / point : 0;
+   double tpDistPts = (point > 0) ? tpDist / point : 0;
+
+   // Determine outcome (first failing filter)
+   string outcome = "ENTRY";
+   if(!passRegime)            outcome = "REJECT_REGIME";
+   else if(!passSlope)        outcome = "REJECT_SLOPE";
+   else if(!passTime)         outcome = "REJECT_TIME";
+   else if(!passSpread)       outcome = "REJECT_SPREAD";
+   else if(!passPosCheck)
+   {
+      if(hasPosition && g_posDir == crossSignal)
+         outcome = "REJECT_SAME_POS";
+      else
+         outcome = "REJECT_REVERSE_IGN";
+   }
+   else if(!passATR)          outcome = "REJECT_ATR";
+   else if(sl <= 0)           outcome = "REJECT_SL_CALC";
+   else if(!passSLWidth)      outcome = "REJECT_SL_WIDE";
+   else if(tp <= 0)           outcome = "REJECT_NO_TP";
+   else if(lot <= 0)          outcome = "REJECT_NO_LOT";
+   else if(!passMargin)       outcome = "REJECT_MARGIN";
+
+   // Execute if all filters passed
+   if(outcome == "ENTRY")
+   {
+      if(g_posTicket > 0)
+         ClosePosition("REVERSE");
+
+      if(!ExecuteEntry(crossSignal, lot, sl, tp, atr))
+         outcome = "REJECT_SEND";
+   }
+
+   // Write signal log (ANALYZE mode)
+   if(LogLevel >= SS_LOG_ANALYZE)
+   {
+      WriteSignalLog(crossSignal, outcome, price, atr, spread,
+                     m5Fast, m5Slow, m5CrossGap, m5SlopeFast, m5SlopeSlow,
+                     h1Fast, h1Slow,
+                     sl, tp, slDistPts, tpDistPts, rr, swingTP, fallbackUsed,
+                     lot, serverHour,
+                     passRegime, passSlope, passTime, passSpread, passSLWidth, passMargin);
+   }
+
+   // Print rejection
+   if(outcome != "ENTRY")
+   {
+      string dirStr = (crossSignal == 1) ? "BUY" : "SELL";
+      Print("[SS] Signal ", dirStr, " rejected: ", outcome);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -351,17 +435,11 @@ void UpdateH1Regime()
    {
       string dir = (g_h1Regime == 1) ? "LONG" : (g_h1Regime == -1) ? "SHORT" : "NEUTRAL";
       if(!wasReady)
-      {
-         if(LogLevel >= SS_LOG_DEBUG)
-            Print("[SS] H1 Regime initialized: ", dir);
-      }
-      else if(LogLevel >= SS_LOG_DEBUG)
-         Print("[SS] H1 Regime changed: ", dir);
-
-      double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      LogEvent("REGIME_CHANGE", g_h1Regime, price, 0, 0, 0,
-               "H1Fast=" + DoubleToString(h1Fast[0], (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)) +
-               " H1Slow=" + DoubleToString(h1Slow[0], (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+         Print("[SS] H1 Regime initialized: ", dir);
+      else
+         Print("[SS] H1 Regime changed: ", dir,
+               " H1Fast=", DoubleToString(h1Fast[0], (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)),
+               " H1Slow=", DoubleToString(h1Slow[0], (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
    }
 }
 
@@ -667,7 +745,7 @@ ENUM_ORDER_TYPE_FILLING GetFillingMode()
 //+------------------------------------------------------------------+
 //| Execute Entry                                                      |
 //+------------------------------------------------------------------+
-void ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
+bool ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
 {
    ENUM_ORDER_TYPE orderType = (direction == 1) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    double price = (direction == 1) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
@@ -697,17 +775,13 @@ void ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
    if(!OrderSend(request, result))
    {
       Print("[SS] OrderSend FAILED: ", result.retcode, " ", result.comment);
-      LogEvent("REJECT", direction, price, sl, tp, atr,
-               "SEND_FAIL_" + IntegerToString(result.retcode));
-      return;
+      return false;
    }
 
    if(result.retcode != TRADE_RETCODE_DONE && result.retcode != TRADE_RETCODE_PLACED)
    {
       Print("[SS] OrderSend rejected: ", result.retcode, " ", result.comment);
-      LogEvent("REJECT", direction, price, sl, tp, atr,
-               "REJECTED_" + IntegerToString(result.retcode));
-      return;
+      return false;
    }
 
    // Resolve position ticket from deal ticket (they differ in MT5)
@@ -733,6 +807,19 @@ void ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
       g_trailHighest = 0;
    }
 
+   // Initialize trade lifecycle tracking
+   g_tradeEntryTime  = TimeCurrent();
+   g_tradeATR        = atr;
+   g_tradeSpread     = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   g_tradeSLInitial  = sl;
+   g_tradeLastSL     = sl;
+   g_tradeTP         = tp;
+   g_tradeLot        = lot;
+   g_tradeH1Regime   = g_h1Regime;
+   g_tradeTrailCount = 0;
+   g_tradePeakHigh   = g_posOpenPrice;
+   g_tradePeakLow    = g_posOpenPrice;
+
    // Persist ticket in GlobalVariable for restart recovery
    if(g_posTicket > 0)
    {
@@ -747,7 +834,7 @@ void ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
 
    Print(msg);
    SendNotification_SS(msg);
-   LogEvent("ENTRY", direction, g_posOpenPrice, sl, tp, atr, "");
+   return true;
 }
 
 //+------------------------------------------------------------------+
@@ -817,11 +904,11 @@ void UpdateTrailingStop()
 
    if(result.retcode == TRADE_RETCODE_DONE)
    {
-      if(LogLevel >= SS_LOG_DEBUG)
+      g_tradeTrailCount++;
+      g_tradeLastSL = newSL;
+      if(LogLevel >= SS_LOG_NORMAL)
          Print("[SS] Trail SL updated: ", DoubleToString(currentSL, digits),
                " -> ", DoubleToString(newSL, digits));
-      LogEvent("TRAIL_UPDATE", g_posDir, SymbolInfoDouble(_Symbol, SYMBOL_BID),
-               newSL, currentTP, atr, "prev=" + DoubleToString(currentSL, digits));
    }
 }
 
@@ -839,7 +926,11 @@ void ClosePosition(string reason)
       return;
    }
 
-   double volume = PositionGetDouble(POSITION_VOLUME);
+   // Capture position data BEFORE closing
+   double slFinal     = PositionGetDouble(POSITION_SL);
+   double profitMoney = PositionGetDouble(POSITION_PROFIT);
+   double volume      = PositionGetDouble(POSITION_VOLUME);
+
    ENUM_ORDER_TYPE closeType = (g_posDir == 1) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
    double price = (closeType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
                                                  : SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -871,15 +962,40 @@ void ClosePosition(string reason)
       return;  // Position still alive — do NOT reset state or clear GV
    }
 
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double profitPts = 0;
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    if(point > 0)
    {
       if(g_posDir == 1)
-         profitPts = (price - openPrice) / point;
+         profitPts = (price - g_posOpenPrice) / point;
       else
-         profitPts = (openPrice - price) / point;
+         profitPts = (g_posOpenPrice - price) / point;
+   }
+
+   // Write trade log
+   if(LogLevel >= SS_LOG_NORMAL)
+   {
+      int holdBars = iBarShift(_Symbol, PERIOD_M5, g_tradeEntryTime);
+      double mfePts = 0, maePts = 0;
+      if(point > 0)
+      {
+         if(g_posDir == 1)
+         {
+            mfePts = (g_tradePeakHigh - g_posOpenPrice) / point;
+            maePts = (g_posOpenPrice - g_tradePeakLow) / point;
+         }
+         else
+         {
+            mfePts = (g_posOpenPrice - g_tradePeakLow) / point;
+            maePts = (g_tradePeakHigh - g_posOpenPrice) / point;
+         }
+      }
+      WriteTradeLog(g_tradeEntryTime, TimeCurrent(), g_posDir,
+                    g_posOpenPrice, price, g_tradeLot,
+                    g_tradeSLInitial, slFinal, g_tradeTP,
+                    profitPts, profitMoney, holdBars, reason,
+                    g_tradeTrailCount, g_tradeATR, g_tradeSpread, g_tradeH1Regime,
+                    mfePts, maePts);
    }
 
    string dirStr = (g_posDir == 1) ? "BUY" : "SELL";
@@ -889,7 +1005,6 @@ void ClosePosition(string reason)
 
    Print(msg);
    SendNotification_SS(msg);
-   LogEvent("EXIT", g_posDir, price, 0, 0, 0, "Reason=" + reason);
 
    ResetPositionState();
 }
@@ -902,11 +1017,15 @@ void DetectExitReason()
    // Try to determine how the position was closed
    string reason = "EXTERNAL";
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
 
    // Check recent deal history
    datetime from = TimeCurrent() - 360;
    datetime to   = TimeCurrent() + 1;
    HistorySelect(from, to);
+
+   double exitPrice   = 0;
+   double profitMoney = 0;
 
    int totalDeals = HistoryDealsTotal();
    for(int i = totalDeals - 1; i >= 0; i--)
@@ -924,41 +1043,67 @@ void DetectExitReason()
 
       if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_OUT_BY)
       {
+         exitPrice   = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+         profitMoney = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+
          if(dealReason == DEAL_REASON_TP)
             reason = "TP_HIT";
          else if(dealReason == DEAL_REASON_SL)
             reason = "SL_HIT";
-         // Could be ATR_TRAIL if SL was trailed, but MT5 reports as SL
          break;
       }
    }
 
    // For SL_HIT, check if SL was trailed (different from initial)
-   // Heuristic: if SL reason and we had updated trailing, call it ATR_TRAIL
-   if(reason == "SL_HIT" && g_posDir == 1 && g_trailHighest > g_posOpenPrice)
-      reason = "ATR_TRAIL";
-   else if(reason == "SL_HIT" && g_posDir == -1 && g_trailLowest > 0 && g_trailLowest < g_posOpenPrice)
+   if(reason == "SL_HIT" && g_tradeTrailCount > 0)
       reason = "ATR_TRAIL";
 
-   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   // Fallback exit price
+   if(exitPrice <= 0)
+      exitPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
    double profitPts = 0;
-   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    if(point > 0 && g_posOpenPrice > 0)
    {
       if(g_posDir == 1)
-         profitPts = (price - g_posOpenPrice) / point;
+         profitPts = (exitPrice - g_posOpenPrice) / point;
       else
-         profitPts = (g_posOpenPrice - price) / point;
+         profitPts = (g_posOpenPrice - exitPrice) / point;
+   }
+
+   // Write trade log
+   if(LogLevel >= SS_LOG_NORMAL)
+   {
+      int holdBars = iBarShift(_Symbol, PERIOD_M5, g_tradeEntryTime);
+      double mfePts = 0, maePts = 0;
+      if(point > 0)
+      {
+         if(g_posDir == 1)
+         {
+            mfePts = (g_tradePeakHigh - g_posOpenPrice) / point;
+            maePts = (g_posOpenPrice - g_tradePeakLow) / point;
+         }
+         else
+         {
+            mfePts = (g_posOpenPrice - g_tradePeakLow) / point;
+            maePts = (g_tradePeakHigh - g_posOpenPrice) / point;
+         }
+      }
+      WriteTradeLog(g_tradeEntryTime, TimeCurrent(), g_posDir,
+                    g_posOpenPrice, exitPrice, g_tradeLot,
+                    g_tradeSLInitial, g_tradeLastSL, g_tradeTP,
+                    profitPts, profitMoney, holdBars, reason,
+                    g_tradeTrailCount, g_tradeATR, g_tradeSpread, g_tradeH1Regime,
+                    mfePts, maePts);
    }
 
    string dirStr = (g_posDir == 1) ? "BUY" : "SELL";
    string msg = StringFormat("[SS_EXIT] %s  %s | %s | %."+IntegerToString(digits)+"f | Profit=%+.0fpoints | Reason=%s",
                              dirStr, TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
-                             _Symbol, price, profitPts, reason);
+                             _Symbol, exitPrice, profitPts, reason);
 
    Print(msg);
    SendNotification_SS(msg);
-   LogEvent("EXIT", g_posDir, price, 0, 0, 0, "Reason=" + reason);
 }
 
 //+------------------------------------------------------------------+
@@ -992,6 +1137,17 @@ void FindOwnPosition()
    g_posOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    long posType   = PositionGetInteger(POSITION_TYPE);
    g_posDir = (posType == POSITION_TYPE_BUY) ? 1 : -1;
+
+   // Reconstruct trade tracking (best-effort after restart)
+   g_tradeEntryTime = (datetime)PositionGetInteger(POSITION_TIME);
+   g_tradeLastSL    = PositionGetDouble(POSITION_SL);
+   g_tradeSLInitial = g_tradeLastSL;  // approximate — initial SL is lost across restarts
+   g_tradeTP        = PositionGetDouble(POSITION_TP);
+   g_tradeLot       = PositionGetDouble(POSITION_VOLUME);
+   g_tradeH1Regime  = g_h1Regime;
+   g_tradeATR       = 0;     // lost across restarts
+   g_tradeSpread    = 0;     // lost across restarts
+   g_tradeTrailCount = 0;    // lost across restarts
 
    ReconstructTrailTrackers();
 }
@@ -1027,7 +1183,19 @@ void ReconstructTrailTrackers()
    else
       g_trailHighest = 0;
 
-   if(LogLevel >= SS_LOG_DEBUG && barShift > 0)
+   // Also set MFE/MAE peak trackers from the same bar scan
+   g_tradePeakHigh = g_trailHighest > 0 ? g_trailHighest : g_posOpenPrice;
+   g_tradePeakLow  = g_trailLowest  > 0 ? g_trailLowest  : g_posOpenPrice;
+   // Re-scan for full peak (need both directions regardless of posDir)
+   for(int ss = 1; ss <= barShift; ss++)
+   {
+      double hh = iHigh(_Symbol, PERIOD_M5, ss);
+      double ll = iLow(_Symbol, PERIOD_M5, ss);
+      if(hh > g_tradePeakHigh) g_tradePeakHigh = hh;
+      if(ll < g_tradePeakLow)  g_tradePeakLow  = ll;
+   }
+
+   if(LogLevel >= SS_LOG_NORMAL && barShift > 0)
       Print("[SS] Trail trackers reconstructed from ", barShift, " M5 bars. ",
             (g_posDir == 1) ? "Highest=" + DoubleToString(g_trailHighest, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS))
                             : "Lowest="  + DoubleToString(g_trailLowest, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
@@ -1043,6 +1211,19 @@ void ResetPositionState()
    g_posOpenPrice = 0;
    g_trailHighest = 0;
    g_trailLowest  = 0;
+
+   // Reset trade lifecycle tracking
+   g_tradeEntryTime  = 0;
+   g_tradeATR        = 0;
+   g_tradeSpread     = 0;
+   g_tradeSLInitial  = 0;
+   g_tradeLastSL     = 0;
+   g_tradeTP         = 0;
+   g_tradeLot        = 0;
+   g_tradeH1Regime   = 0;
+   g_tradeTrailCount = 0;
+   g_tradePeakHigh   = 0;
+   g_tradePeakLow    = DBL_MAX;
 
    // Clear persisted ticket
    if(g_gvKey != "")
@@ -1073,101 +1254,210 @@ void SendNotification_SS(string msg)
 }
 
 //+------------------------------------------------------------------+
-//| Log Event (TSV)                                                    |
+//| Write Signal Log (one row per M5 EMA cross)                        |
 //+------------------------------------------------------------------+
-void LogEvent(string event, int direction, double price, double sl, double tp,
-              double atr, string detail)
+void WriteSignalLog(int direction, string outcome, double price, double atr, long spread,
+                    double m5Fast, double m5Slow, double m5CrossGap, double m5SlopeFast, double m5SlopeSlow,
+                    double h1Fast, double h1Slow,
+                    double sl, double tp, double slDistPts, double tpDistPts, double rr,
+                    double swingTP, bool fallbackUsed,
+                    double lot, int serverHour,
+                    bool passRegime, bool passSlope, bool passTime, bool passSpread,
+                    bool passSLWidth, bool passMargin)
 {
-   if(LogLevel < SS_LOG_DEBUG)
-      return;
-
-   // Ensure log file is open
-   OpenLogFile();
-   if(g_logFileHandle == INVALID_HANDLE)
+   OpenSignalLog();
+   if(g_signalLogHandle == INVALID_HANDLE)
       return;
 
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-
-   // Get current EMA values
-   double h1Fast = 0, h1Slow = 0, m5Fast = 0, m5Slow = 0;
-   double buf[];
-   ArraySetAsSeries(buf, true);
-
-   if(CopyBuffer(g_h1EmaFastHandle, 0, 1, 1, buf) >= 1) h1Fast = buf[0];
-   if(CopyBuffer(g_h1EmaSlowHandle, 0, 1, 1, buf) >= 1) h1Slow = buf[0];
-   if(CopyBuffer(g_m5EmaFastHandle, 0, 1, 1, buf) >= 1) m5Fast = buf[0];
-   if(CopyBuffer(g_m5EmaSlowHandle, 0, 1, 1, buf) >= 1) m5Slow = buf[0];
-
-   string dirStr = (direction == 1) ? "BUY" : (direction == -1) ? "SELL" : "NONE";
+   string dirStr = (direction == 1) ? "BUY" : "SELL";
+   string regimeStr = (g_h1Regime == 1) ? "LONG" : (g_h1Regime == -1) ? "SHORT" : "NEUTRAL";
 
    string line = TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES|TIME_SECONDS) + "\t" +
                  _Symbol + "\t" +
-                 event + "\t" +
                  dirStr + "\t" +
+                 outcome + "\t" +
                  DoubleToString(price, digits) + "\t" +
-                 DoubleToString(sl, digits) + "\t" +
-                 DoubleToString(tp, digits) + "\t" +
                  DoubleToString(atr, digits) + "\t" +
-                 DoubleToString(h1Fast, digits) + "\t" +
-                 DoubleToString(h1Slow, digits) + "\t" +
+                 IntegerToString(spread) + "\t" +
                  DoubleToString(m5Fast, digits) + "\t" +
                  DoubleToString(m5Slow, digits) + "\t" +
-                 detail + "\n";
+                 DoubleToString(m5CrossGap, digits) + "\t" +
+                 DoubleToString(m5SlopeFast, digits) + "\t" +
+                 DoubleToString(m5SlopeSlow, digits) + "\t" +
+                 regimeStr + "\t" +
+                 DoubleToString(h1Fast, digits) + "\t" +
+                 DoubleToString(h1Slow, digits) + "\t" +
+                 DoubleToString(sl, digits) + "\t" +
+                 DoubleToString(tp, digits) + "\t" +
+                 DoubleToString(slDistPts, 1) + "\t" +
+                 DoubleToString(tpDistPts, 1) + "\t" +
+                 DoubleToString(rr, 2) + "\t" +
+                 DoubleToString(swingTP, digits) + "\t" +
+                 (fallbackUsed ? "1" : "0") + "\t" +
+                 DoubleToString(lot, 2) + "\t" +
+                 IntegerToString(serverHour) + "\t" +
+                 (passRegime  ? "1" : "0") + "\t" +
+                 (passSlope   ? "1" : "0") + "\t" +
+                 (passTime    ? "1" : "0") + "\t" +
+                 (passSpread  ? "1" : "0") + "\t" +
+                 (passSLWidth ? "1" : "0") + "\t" +
+                 (passMargin  ? "1" : "0") + "\n";
 
-   FileWriteString(g_logFileHandle, line);
-   FileFlush(g_logFileHandle);
+   FileWriteString(g_signalLogHandle, line);
+   FileFlush(g_signalLogHandle);
 }
 
 //+------------------------------------------------------------------+
-//| Open Log File                                                      |
+//| Open Signal Log File (daily rotation)                              |
 //+------------------------------------------------------------------+
-void OpenLogFile()
+void OpenSignalLog()
 {
    MqlDateTime dt;
    TimeCurrent(dt);
    string dateStr = StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
 
-   // Rotate daily
-   if(dateStr != g_logDate)
+   if(dateStr != g_signalLogDate)
    {
-      CloseLogFile();
-      g_logDate = dateStr;
+      CloseSignalLog();
+      g_signalLogDate = dateStr;
    }
 
-   if(g_logFileHandle != INVALID_HANDLE)
+   if(g_signalLogHandle != INVALID_HANDLE)
       return;
 
    string tagSuffix = (InstanceTag != "") ? "_" + InstanceTag : "";
-   string fileName = "SwingSignalEA_" + dateStr + "_" + _Symbol + tagSuffix + ".tsv";
-   g_logFileHandle = FileOpen(fileName, FILE_WRITE|FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ);
+   string fileName = "SS_SIGNAL_" + dateStr + "_" + _Symbol + tagSuffix + ".tsv";
+   g_signalLogHandle = FileOpen(fileName, FILE_WRITE|FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ);
 
-   if(g_logFileHandle == INVALID_HANDLE)
+   if(g_signalLogHandle == INVALID_HANDLE)
    {
-      Print("[SS] WARNING: Cannot open log file: ", fileName);
+      Print("[SS] WARNING: Cannot open signal log: ", fileName);
       return;
    }
 
-   // If new file, write header
-   if(FileSize(g_logFileHandle) == 0)
+   if(FileSize(g_signalLogHandle) == 0)
    {
-      string header = "Time\tSymbol\tEvent\tDirection\tPrice\tSL\tTP\tATR\tH1_Fast\tH1_Slow\tM5_Fast\tM5_Slow\tDetail\n";
-      FileWriteString(g_logFileHandle, header);
+      string header = "Time\tSymbol\tDir\tOutcome\tPrice\tATR\tSpreadPts\t"
+                      "M5Fast\tM5Slow\tM5CrossGap\tM5SlopeFast\tM5SlopeSlow\t"
+                      "H1Regime\tH1Fast\tH1Slow\t"
+                      "SL\tTP\tSL_DistPts\tTP_DistPts\tRR\tSwingTP\tFallbackUsed\t"
+                      "Lot\tServerHour\t"
+                      "PassRegime\tPassSlope\tPassTime\tPassSpread\tPassSLWidth\tPassMargin\n";
+      FileWriteString(g_signalLogHandle, header);
    }
    else
    {
-      FileSeek(g_logFileHandle, 0, SEEK_END);
+      FileSeek(g_signalLogHandle, 0, SEEK_END);
    }
 }
 
 //+------------------------------------------------------------------+
-//| Close Log File                                                     |
+//| Close Signal Log File                                              |
 //+------------------------------------------------------------------+
-void CloseLogFile()
+void CloseSignalLog()
 {
-   if(g_logFileHandle != INVALID_HANDLE)
+   if(g_signalLogHandle != INVALID_HANDLE)
    {
-      FileClose(g_logFileHandle);
-      g_logFileHandle = INVALID_HANDLE;
+      FileClose(g_signalLogHandle);
+      g_signalLogHandle = INVALID_HANDLE;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Write Trade Log (one row per completed trade lifecycle)            |
+//+------------------------------------------------------------------+
+void WriteTradeLog(datetime entryTime, datetime exitTime, int direction,
+                   double entryPrice, double exitPrice, double lot,
+                   double slInitial, double slFinal, double tp,
+                   double profitPts, double profitMoney, int holdBars, string exitReason,
+                   int trailCount, double atrEntry, long spreadEntry, int h1RegimeEntry,
+                   double mfePts, double maePts)
+{
+   OpenTradeLog();
+   if(g_tradeLogHandle == INVALID_HANDLE)
+      return;
+
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   string dirStr = (direction == 1) ? "BUY" : "SELL";
+   string regimeStr = (h1RegimeEntry == 1) ? "LONG" : (h1RegimeEntry == -1) ? "SHORT" : "NEUTRAL";
+
+   string line = TimeToString(entryTime, TIME_DATE|TIME_MINUTES|TIME_SECONDS) + "\t" +
+                 TimeToString(exitTime, TIME_DATE|TIME_MINUTES|TIME_SECONDS) + "\t" +
+                 _Symbol + "\t" +
+                 dirStr + "\t" +
+                 DoubleToString(entryPrice, digits) + "\t" +
+                 DoubleToString(exitPrice, digits) + "\t" +
+                 DoubleToString(lot, 2) + "\t" +
+                 DoubleToString(slInitial, digits) + "\t" +
+                 DoubleToString(slFinal, digits) + "\t" +
+                 DoubleToString(tp, digits) + "\t" +
+                 DoubleToString(profitPts, 1) + "\t" +
+                 DoubleToString(profitMoney, 2) + "\t" +
+                 IntegerToString(holdBars) + "\t" +
+                 exitReason + "\t" +
+                 IntegerToString(trailCount) + "\t" +
+                 DoubleToString(atrEntry, digits) + "\t" +
+                 IntegerToString(spreadEntry) + "\t" +
+                 regimeStr + "\t" +
+                 DoubleToString(mfePts, 1) + "\t" +
+                 DoubleToString(maePts, 1) + "\n";
+
+   FileWriteString(g_tradeLogHandle, line);
+   FileFlush(g_tradeLogHandle);
+}
+
+//+------------------------------------------------------------------+
+//| Open Trade Log File (daily rotation)                               |
+//+------------------------------------------------------------------+
+void OpenTradeLog()
+{
+   MqlDateTime dt;
+   TimeCurrent(dt);
+   string dateStr = StringFormat("%04d%02d%02d", dt.year, dt.mon, dt.day);
+
+   if(dateStr != g_tradeLogDate)
+   {
+      CloseTradeLog();
+      g_tradeLogDate = dateStr;
+   }
+
+   if(g_tradeLogHandle != INVALID_HANDLE)
+      return;
+
+   string tagSuffix = (InstanceTag != "") ? "_" + InstanceTag : "";
+   string fileName = "SS_TRADE_" + dateStr + "_" + _Symbol + tagSuffix + ".tsv";
+   g_tradeLogHandle = FileOpen(fileName, FILE_WRITE|FILE_READ|FILE_TXT|FILE_ANSI|FILE_SHARE_READ);
+
+   if(g_tradeLogHandle == INVALID_HANDLE)
+   {
+      Print("[SS] WARNING: Cannot open trade log: ", fileName);
+      return;
+   }
+
+   if(FileSize(g_tradeLogHandle) == 0)
+   {
+      string header = "EntryTime\tExitTime\tSymbol\tDir\tEntryPrice\tExitPrice\tLot\t"
+                      "SL_Initial\tSL_Final\tTP\tProfitPts\tProfitMoney\tHoldBarsM5\t"
+                      "ExitReason\tTrailCount\tATR_Entry\tSpreadEntry\tH1Regime_Entry\t"
+                      "MFE_Pts\tMAE_Pts\n";
+      FileWriteString(g_tradeLogHandle, header);
+   }
+   else
+   {
+      FileSeek(g_tradeLogHandle, 0, SEEK_END);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Close Trade Log File                                               |
+//+------------------------------------------------------------------+
+void CloseTradeLog()
+{
+   if(g_tradeLogHandle != INVALID_HANDLE)
+   {
+      FileClose(g_tradeLogHandle);
+      g_tradeLogHandle = INVALID_HANDLE;
    }
 }
 

@@ -115,6 +115,14 @@ bool g_isTester = false;
 int    g_logFileHandle = INVALID_HANDLE;
 string g_logDate       = "";
 
+// Panel
+const string g_panelPrefix = "SS_Panel_";
+const int    PANEL_X       = 14;
+const int    PANEL_Y       = 20;
+const int    PANEL_LINE_H  = 16;
+const int    PANEL_FSIZE   = 9;
+const int    PANEL_MAXLINE = 10;
+
 //+------------------------------------------------------------------+
 //| OnInit                                                            |
 //+------------------------------------------------------------------+
@@ -147,6 +155,7 @@ int OnInit()
    FindOwnPosition();
 
    Print("[SS] SwingSignalEA initialized. Magic=", MagicNumber);
+   UpdatePanel();
    return INIT_SUCCEEDED;
 }
 
@@ -162,6 +171,7 @@ void OnDeinit(const int reason)
    if(g_m5AtrHandle != INVALID_HANDLE)     IndicatorRelease(g_m5AtrHandle);
 
    CloseLogFile();
+   DeletePanel();
 }
 
 //+------------------------------------------------------------------+
@@ -174,6 +184,7 @@ void OnTick()
    if(m5BarTime == g_lastM5Bar)
       return;
    g_lastM5Bar = m5BarTime;
+   UpdatePanel();
 
    //--- 2. H1 new bar check & regime update
    datetime h1BarTime = iTime(_Symbol, PERIOD_H1, 0);
@@ -1117,5 +1128,121 @@ void CloseLogFile()
       FileClose(g_logFileHandle);
       g_logFileHandle = INVALID_HANDLE;
    }
+}
+
+//+------------------------------------------------------------------+
+//| Panel: set one label line                                         |
+//+------------------------------------------------------------------+
+void PanelSetLine(int row, int totalRows, const string text, color clr)
+{
+   string name = g_panelPrefix + IntegerToString(row);
+   int yPos = PANEL_Y + (totalRows - 1 - row) * PANEL_LINE_H;
+
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER,     CORNER_LEFT_LOWER);
+      ObjectSetInteger(0, name, OBJPROP_ANCHOR,      ANCHOR_LEFT_LOWER);
+      ObjectSetString (0, name, OBJPROP_FONT,        "Consolas");
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE,    PANEL_FSIZE);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE,  false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN,      true);
+   }
+
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, PANEL_X);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, yPos);
+   ObjectSetString (0, name, OBJPROP_TEXT,       text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR,      clr);
+}
+
+//+------------------------------------------------------------------+
+//| Update Chart Status Panel                                         |
+//+------------------------------------------------------------------+
+void UpdatePanel()
+{
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   string lines[];
+   color  colors[];
+   ArrayResize(lines, PANEL_MAXLINE);
+   ArrayResize(colors, PANEL_MAXLINE);
+   int n = 0;
+
+   // Line 0: EA title + time
+   lines[n]  = "SwingSignalEA  " + TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES);
+   colors[n] = clrWhite;
+   n++;
+
+   // Line 1: Trading status
+   string regime = (g_h1Regime == 1) ? "LONG" : (g_h1Regime == -1) ? "SHORT" : "NEUTRAL";
+   lines[n]  = "H1 Regime: " + regime + "  Trading: " + (EnableTrading ? "ON" : "OFF");
+   colors[n] = (g_h1Regime == 1) ? clrLime : (g_h1Regime == -1) ? clrOrangeRed : clrDarkGray;
+   n++;
+
+   // Line 2: Market
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   long spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   double atr = GetM5ATR();
+   lines[n]  = "Bid: " + DoubleToString(bid, digits) + "  Spread: " + IntegerToString(spread) +
+               "  ATR: " + DoubleToString(atr, digits);
+   colors[n] = clrWhite;
+   n++;
+
+   // Line 3+: Position info
+   if(g_posTicket > 0 && PositionSelectByTicket(g_posTicket))
+   {
+      string dir = (g_posDir == 1) ? "BUY" : "SELL";
+      double openP = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl    = PositionGetDouble(POSITION_SL);
+      double tp    = PositionGetDouble(POSITION_TP);
+      double profit = PositionGetDouble(POSITION_PROFIT);
+
+      lines[n]  = "Position: " + dir + "  #" + IntegerToString((int)g_posTicket);
+      colors[n] = clrLime;
+      n++;
+
+      lines[n]  = "Entry: " + DoubleToString(openP, digits) +
+                  "  SL: " + DoubleToString(sl, digits) +
+                  "  TP: " + DoubleToString(tp, digits);
+      colors[n] = clrWhite;
+      n++;
+
+      lines[n]  = "P/L: " + DoubleToString(profit, 2) + " " + AccountInfoString(ACCOUNT_CURRENCY);
+      colors[n] = (profit >= 0) ? clrLime : clrOrangeRed;
+      n++;
+   }
+   else
+   {
+      lines[n]  = "Position: NONE";
+      colors[n] = clrDarkGray;
+      n++;
+   }
+
+   // Render lines
+   for(int i = 0; i < n; i++)
+      PanelSetLine(i, n, lines[i], colors[i]);
+
+   // Delete excess lines
+   for(int i = n; i < PANEL_MAXLINE; i++)
+   {
+      string name = g_panelPrefix + IntegerToString(i);
+      if(ObjectFind(0, name) >= 0)
+         ObjectDelete(0, name);
+   }
+
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Delete Panel                                                       |
+//+------------------------------------------------------------------+
+void DeletePanel()
+{
+   for(int i = 0; i < PANEL_MAXLINE; i++)
+   {
+      string name = g_panelPrefix + IntegerToString(i);
+      if(ObjectFind(0, name) >= 0)
+         ObjectDelete(0, name);
+   }
+   ChartRedraw();
 }
 //+------------------------------------------------------------------+

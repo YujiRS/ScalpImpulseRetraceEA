@@ -101,7 +101,8 @@ datetime g_lastM5Bar = 0;
 datetime g_lastH1Bar = 0;
 
 // H1 regime
-int g_h1Regime = 0;  // 1=Long, -1=Short, 0=Neutral
+int g_h1Regime = 0;     // 1=Long, -1=Short, 0=Neutral
+bool g_h1RegimeReady = false;  // true after first H1 regime calculation
 
 // Position tracking
 ulong  g_posTicket = 0;
@@ -152,6 +153,7 @@ int OnInit()
    g_lastM5Bar = 0;
    g_lastH1Bar = 0;
    g_h1Regime  = 0;
+   g_h1RegimeReady = false;
 
    // Check for existing position
    FindOwnPosition();
@@ -194,10 +196,13 @@ void OnTick()
    if(h1NewBar)
    {
       g_lastH1Bar = h1BarTime;
+      bool wasReady = g_h1RegimeReady;
       UpdateH1Regime();
 
       // Exit 4: H1 regime end → immediate close
-      if(g_posTicket > 0)
+      // Skip on first regime calculation after init (wasReady=false)
+      // to avoid closing existing positions due to uninitialized state
+      if(wasReady && g_posTicket > 0)
       {
          if((g_posDir == 1 && g_h1Regime != 1) ||
             (g_posDir == -1 && g_h1Regime != -1))
@@ -326,6 +331,7 @@ void UpdateH1Regime()
    }
 
    int prevRegime = g_h1Regime;
+   bool wasReady = g_h1RegimeReady;
 
    if(h1Fast[0] > h1Slow[0])
       g_h1Regime = 1;
@@ -334,10 +340,17 @@ void UpdateH1Regime()
    else
       g_h1Regime = 0;
 
+   g_h1RegimeReady = true;
+
    if(prevRegime != g_h1Regime)
    {
       string dir = (g_h1Regime == 1) ? "LONG" : (g_h1Regime == -1) ? "SHORT" : "NEUTRAL";
-      if(LogLevel >= SS_LOG_DEBUG)
+      if(!wasReady)
+      {
+         if(LogLevel >= SS_LOG_DEBUG)
+            Print("[SS] H1 Regime initialized: ", dir);
+      }
+      else if(LogLevel >= SS_LOG_DEBUG)
          Print("[SS] H1 Regime changed: ", dir);
 
       double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);

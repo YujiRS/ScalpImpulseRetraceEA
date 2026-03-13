@@ -43,6 +43,8 @@ input double            RiskPercent            = 1.0;                        // 
 input double            MinMarginLevel         = 1500;                       // Min margin level after entry (%, 0=off)
 input string            InstanceTag            = "";                         // Instance Tag (comment)
 input ENUM_REVERSE_MODE ReverseMode            = REVERSE_CLOSE_AND_OPEN;    // Reverse Mode
+input double            LongDisableAbove       = 0;                         // LongDisableAbove(Bid≧この値でLong禁止, 0=制御なし)
+input double            ShortDisableBelow      = 0;                         // ShortDisableBelow(Bid≦この値でShort禁止, 0=制御なし)
 
 // === G9: Notification ===
 input bool              EnableAlert            = true;           // Alert on entry/exit
@@ -309,6 +311,12 @@ void OnTick()
    bool passSlope   = CheckSlopeFilter(crossSignal, atr);
    bool passTime    = CheckTimeFilter();
    bool passSpread  = CheckSpreadFilter();
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   bool passPriceCtrl = true;
+   if(crossSignal == 1 && LongDisableAbove > 0 && bid >= LongDisableAbove)
+      passPriceCtrl = false;
+   if(crossSignal == -1 && ShortDisableBelow > 0 && bid <= ShortDisableBelow)
+      passPriceCtrl = false;
    bool hasPosition = (g_posTicket > 0);
    bool passPosCheck = true;
    if(hasPosition)
@@ -362,6 +370,7 @@ void OnTick()
    else if(!passSlope)        outcome = "REJECT_SLOPE";
    else if(!passTime)         outcome = "REJECT_TIME";
    else if(!passSpread)       outcome = "REJECT_SPREAD";
+   else if(!passPriceCtrl)    outcome = "REJECT_PRICE_CTRL";
    else if(!passPosCheck)
    {
       if(hasPosition && g_posDir == crossSignal)
@@ -394,7 +403,7 @@ void OnTick()
                      h1Fast, h1Slow,
                      sl, tp, slDistPts, tpDistPts, rr, swingTP, fallbackUsed,
                      lot, serverHour,
-                     passRegime, passSlope, passTime, passSpread, passSLWidth, passMargin);
+                     passRegime, passSlope, passTime, passSpread, passPriceCtrl, passSLWidth, passMargin);
    }
 
    // Print rejection
@@ -1282,7 +1291,7 @@ void WriteSignalLog(int direction, string outcome, double price, double atr, lon
                     double swingTP, bool fallbackUsed,
                     double lot, int serverHour,
                     bool passRegime, bool passSlope, bool passTime, bool passSpread,
-                    bool passSLWidth, bool passMargin)
+                    bool passPriceCtrl, bool passSLWidth, bool passMargin)
 {
    OpenSignalLog();
    if(g_signalLogHandle == INVALID_HANDLE)
@@ -1320,6 +1329,7 @@ void WriteSignalLog(int direction, string outcome, double price, double atr, lon
                  (passSlope   ? "1" : "0") + "\t" +
                  (passTime    ? "1" : "0") + "\t" +
                  (passSpread  ? "1" : "0") + "\t" +
+                 (passPriceCtrl ? "1" : "0") + "\t" +
                  (passSLWidth ? "1" : "0") + "\t" +
                  (passMargin  ? "1" : "0") + "\n";
 
@@ -1362,7 +1372,7 @@ void OpenSignalLog()
                       "H1Regime\tH1Fast\tH1Slow\t"
                       "SL\tTP\tSL_DistPts\tTP_DistPts\tRR\tSwingTP\tFallbackUsed\t"
                       "Lot\tServerHour\t"
-                      "PassRegime\tPassSlope\tPassTime\tPassSpread\tPassSLWidth\tPassMargin\n";
+                      "PassRegime\tPassSlope\tPassTime\tPassSpread\tPassPriceCtrl\tPassSLWidth\tPassMargin\n";
       FileWriteString(g_signalLogHandle, header);
    }
    else

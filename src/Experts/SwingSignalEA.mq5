@@ -687,6 +687,14 @@ double CalculateLot(double slDistance)
 
       double slTicks = slDistance / tickSize;
       lot = riskAmount / (slTicks * tickValue);
+
+      Print("[RiskCalc] equity=", equity,
+            " RiskPercent=", RiskPercent,
+            " riskAmount=", riskAmount,
+            " slDistance=", slDistance,
+            " tickValue=", tickValue,
+            " tickSize=", tickSize,
+            " rawLot=", lot);
    }
 
    // Normalize lot
@@ -699,6 +707,8 @@ double CalculateLot(double slDistance)
 
    if(lot < minLot) lot = 0;
    if(lot > maxLot) lot = maxLot;
+
+   Print("[RiskCalc] finalLot=", lot, " minLot=", minLot, " lotStep=", lotStep);
 
    return lot;
 }

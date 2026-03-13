@@ -68,6 +68,7 @@ input double            Pin_WickRatio          = 2.0;            // Pin Bar Wick
 input double            MinRR                  = 2.0;            // Minimum Reward:Risk
 input double            MaxSL_ATR              = 2.0;            // Max SL (ATR multiple)
 input double            SL_BufferPoints        = 50;             // SL Buffer (points)
+input double            SLMarginSpreadMult     = 1.5;            // SL Margin (Spread * this)
 input bool              UseFixedRR_TP          = true;           // Use Fixed R:R for TP
 
 // === G8: Time Filter (Server Time / UTC) ===
@@ -856,16 +857,18 @@ void WaitForPullbackAndConfirm()
    double entry = m5Close[1];
    double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
    double buffer = SL_BufferPoints * point;
+   double spread = SymbolInfoDouble(Symbol(), SYMBOL_ASK) - SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double slMargin = spread * SLMarginSpreadMult;
    double sl, tp, slDist;
 
    if(tradeDir == RR_DIR_LONG)
    {
-      sl = m5Low[1] - buffer;
+      sl = m5Low[1] - buffer - slMargin;
       slDist = entry - sl;
    }
    else
    {
-      sl = m5High[1] + buffer;
+      sl = m5High[1] + buffer + slMargin;
       slDist = sl - entry;
    }
 

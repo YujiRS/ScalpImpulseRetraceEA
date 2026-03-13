@@ -82,6 +82,7 @@ input double            InputMaxSpreadPts      = 0;             // MaxSpreadPts(
 input double            MinRR_EntryGate_FX      = 0.7;           // MinRR_EntryGate_FX
 input double            MinRangeCostMult_FX     = 2.5;           // MinRangeCostMult_FX
 input double            SLATRMult_FX            = 0.7;           // SLATRMult_FX(SL=ImpulseStart±ATR*this)
+input double            SLMarginSpreadMult_FX   = 1.5;           // SLMarginSpreadMult_FX(SL margin=Spread*this)
 // --- TP Extension ---
 input double            TPExtRatio_FX           = 0.382;         // TPExtRatio_FX(0=Fib100そのまま)
 // --- Insurance TP (PC断時の安全ネット) ---
@@ -774,9 +775,11 @@ void Process_TOUCH_2_WAIT_CONFIRM()
                            ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
                            : SymbolInfoDouble(Symbol(), SYMBOL_BID);
          double _egTP = GetExtendedTP();
+         double _egSpreadSL = SymbolInfoDouble(Symbol(), SYMBOL_ASK) - SymbolInfoDouble(Symbol(), SYMBOL_BID);
+         double _egSLMargin = _egSpreadSL * g_profile.slMarginSpreadMult;
          double _egSL = (g_impulseDir == DIR_LONG)
-                        ? (g_impulseStart - _egAtr * g_profile.slATRMult)
-                        : (g_impulseStart + _egAtr * g_profile.slATRMult);
+                        ? (g_impulseStart - _egAtr * g_profile.slATRMult - _egSLMargin)
+                        : (g_impulseStart + _egAtr * g_profile.slATRMult + _egSLMargin);
 
          double _egRisk   = MathAbs(_egEntry - _egSL);
          double _egReward = MathAbs(_egTP - _egEntry);

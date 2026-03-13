@@ -24,6 +24,7 @@ void InitMarketProfile()
    g_profile.spreadMult              = SpreadMult_CRYPTO;
    g_profile.wickRatioMin            = 0.55;
    g_profile.slATRMult               = SLATRMult_CRYPTO;
+   g_profile.slMarginSpreadMult      = SLMarginSpreadMult_CRYPTO;
    g_profile.minRR_EntryGate         = MinRR_EntryGate_CRYPTO;
    g_profile.minRangeCostMult        = MinRangeCostMult_CRYPTO;
    g_profile.tpExtensionRatio        = TPExtRatio_CRYPTO;

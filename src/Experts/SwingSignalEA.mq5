@@ -72,6 +72,7 @@ input int               H1_SwingMaxAge         = 200;            // H1 Swing Max
 
 // === G5: Stop Loss ===
 input double            SL_BufferATR           = 0.5;            // SL Buffer (ATR fraction)
+input double            SLMarginSpreadMult     = 1.5;            // SL Margin (Spread * this)
 input double            MaxSL_ATR              = 2.0;            // Max SL Width (ATR multiple)
 input double            MinRR                  = 2.0;            // Min Reward:Risk
 
@@ -562,12 +563,14 @@ double CalculateSL(int direction, double atr)
    double low1  = iLow(_Symbol, PERIOD_M5, 1);
    double high1 = iHigh(_Symbol, PERIOD_M5, 1);
    int digits   = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double spread = SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double slMargin = spread * SLMarginSpreadMult;
 
    double sl;
    if(direction == 1)
-      sl = low1 - SL_BufferATR * atr;
+      sl = low1 - SL_BufferATR * atr - slMargin;
    else
-      sl = high1 + SL_BufferATR * atr;
+      sl = high1 + SL_BufferATR * atr + slMargin;
 
    return NormalizeDouble(sl, digits);
 }

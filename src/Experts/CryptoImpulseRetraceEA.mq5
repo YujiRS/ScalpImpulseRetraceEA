@@ -81,6 +81,7 @@ input double            InputMaxSpreadPts      = 0;
 input double            MinRR_EntryGate_CRYPTO  = 0.5;
 input double            MinRangeCostMult_CRYPTO = 2.0;
 input double            SLATRMult_CRYPTO        = 0.7;
+input double            SLMarginSpreadMult_CRYPTO = 1.5;           // SLMarginSpreadMult_CRYPTO(SL margin=Spread*this)
 input double            TPExtRatio_CRYPTO       = 0.382;
 // --- Insurance TP (PC断時の安全ネット) ---
 input double            InsuranceTP_ATRMult_CRYPTO = 3.0;        // 保険TP=Entry±ATR(M1)*this (0=無効)
@@ -424,9 +425,11 @@ void Process_IMPULSE_CONFIRMED()
       double _tp = GetExtendedTP();
       double _point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
 
+      double _spread = SymbolInfoDouble(Symbol(), SYMBOL_ASK) - SymbolInfoDouble(Symbol(), SYMBOL_BID);
+      double _slMargin = _spread * g_profile.slMarginSpreadMult;
       _sl = (g_impulseDir == DIR_LONG)
-            ? (g_impulseStart - _atr * g_profile.slATRMult)
-            : (g_impulseStart + _atr * g_profile.slATRMult);
+            ? (g_impulseStart - _atr * g_profile.slATRMult - _slMargin)
+            : (g_impulseStart + _atr * g_profile.slATRMult + _slMargin);
 
       double _risk   = MathAbs(_entry - _sl);
       double _reward = MathAbs(_tp - _entry);
@@ -571,9 +574,11 @@ void Process_MA_PULLBACK_WAIT()
                            ? SymbolInfoDouble(Symbol(), SYMBOL_ASK)
                            : SymbolInfoDouble(Symbol(), SYMBOL_BID);
          double _egTP = GetExtendedTP();
+         double _egSpreadSL = SymbolInfoDouble(Symbol(), SYMBOL_ASK) - SymbolInfoDouble(Symbol(), SYMBOL_BID);
+         double _egSLMargin = _egSpreadSL * g_profile.slMarginSpreadMult;
          double _egSL = (g_impulseDir == DIR_LONG)
-                        ? (g_impulseStart - _egAtr * g_profile.slATRMult)
-                        : (g_impulseStart + _egAtr * g_profile.slATRMult);
+                        ? (g_impulseStart - _egAtr * g_profile.slATRMult - _egSLMargin)
+                        : (g_impulseStart + _egAtr * g_profile.slATRMult + _egSLMargin);
 
          double _egRisk   = MathAbs(_egEntry - _egSL);
          double _egReward = MathAbs(_egTP - _egEntry);

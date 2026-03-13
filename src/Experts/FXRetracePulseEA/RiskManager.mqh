@@ -100,11 +100,13 @@ void CalculateSLTP(double entryPrice)
 {
    double atr = GetATR_M1(0);
    double mult = g_profile.slATRMult;
+   double spread = SymbolInfoDouble(Symbol(), SYMBOL_ASK) - SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double slMargin = spread * g_profile.slMarginSpreadMult;
 
    if(g_impulseDir == DIR_LONG)
-      g_sl = g_impulseStart - atr * mult;
+      g_sl = g_impulseStart - atr * mult - slMargin;
    else
-      g_sl = g_impulseStart + atr * mult;
+      g_sl = g_impulseStart + atr * mult + slMargin;
 
    // 保険TP: 0より大きい場合のみサーバーTPを設定
    if(InsuranceTP_ATRMult_FX > 0)
@@ -123,7 +125,9 @@ void PreviewSLTP(double entryPrice, double &outSL, double &outTP)
    double atr = GetATR_M1(0);
    double mult = g_profile.slATRMult;
    outTP = GetExtendedTP();
-   outSL = (g_impulseDir == DIR_LONG) ? (g_impulseStart - atr * mult) : (g_impulseStart + atr * mult);
+   double spread = SymbolInfoDouble(Symbol(), SYMBOL_ASK) - SymbolInfoDouble(Symbol(), SYMBOL_BID);
+   double slMargin = spread * g_profile.slMarginSpreadMult;
+   outSL = (g_impulseDir == DIR_LONG) ? (g_impulseStart - atr * mult - slMargin) : (g_impulseStart + atr * mult + slMargin);
 }
 
 //+------------------------------------------------------------------+

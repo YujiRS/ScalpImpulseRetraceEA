@@ -141,6 +141,7 @@ struct MarketProfileData
 
    // EntryGate
    double            slATRMult;
+   double            slMarginSpreadMult;
    double            minRR_EntryGate;
    double            minRangeCostMult;
    double            tpExtensionRatio;

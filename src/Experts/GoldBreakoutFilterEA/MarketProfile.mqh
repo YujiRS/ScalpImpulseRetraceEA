@@ -26,6 +26,7 @@ void InitMarketProfile()
    g_profile.overextensionMult       = 0;
    g_profile.wickRatioMin            = 0.55;
    g_profile.slATRMult               = SLATRMult_GOLD;
+   g_profile.slMarginSpreadMult      = SLMarginSpreadMult_GOLD;
    g_profile.minRR_EntryGate         = MinRR_EntryGate_GOLD;
    g_profile.minRangeCostMult        = MinRangeCostMult_GOLD;
    g_profile.tpExtensionRatio        = TPExtRatio_GOLD;

@@ -17,6 +17,20 @@ Impulse検出＋EMA/Exceedフィルターで高確度エントリー。
 - docs/DOC-CORE.md：旧設計仕様書（SPEC.md + DECISIONS.md に移行済み）
 - docs/DOC-LOG.md：旧ログ仕様書（語彙定義はSPEC.md、列順詳細はコードが正典）
 
+## EA群の構成
+
+このリポジトリには5つのEAが存在する。「EA群」「全EA」と指示された場合は**必ず5つ全て**を対象にすること。
+
+| EA | パス | 構成 |
+|---|---|---|
+| GoldBreakoutFilterEA | `src/Experts/GoldBreakoutFilterEA.mq5` | MarketProfile構造体＋分割ヘッダ（Constants/MarketProfile/RiskManager/Execution/Logger.mqh） |
+| FXRetracePulseEA | `src/Experts/FXRetracePulseEA.mq5` | 同上 |
+| CryptoImpulseRetraceEA | `src/Experts/CryptoImpulseRetraceEA.mq5` | 同上 |
+| SwingSignalEA | `src/Experts/SwingSignalEA.mq5` | **単一ファイル構成**（MarketProfile構造体なし、Input直接参照） |
+| RoleReversalEA | `src/Experts/RoleReversalEA.mq5` | **単一ファイル構成**（MarketProfile構造体なし、Input直接参照） |
+
+**注意:** SwingSignalEA と RoleReversalEA はファイル構成が異なるが、SL計算・スプレッド管理・エントリーロジック等で他3EAと共通の設計パターンを持つ。変更・レビュー時に見落としやすいため、必ず含めること。
+
 ## 技術スタック
 - MQL5 / MetaTrader 5
 - M1（主軸）、M15（Trend判定）、H1（Reversal Guard）

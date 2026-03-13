@@ -22,6 +22,7 @@ void InitMarketProfile()
    g_profile.timeExitBars            = 10;
    g_profile.spreadMult              = SpreadMult_FX;
    g_profile.slATRMult               = SLATRMult_FX;
+   g_profile.slMarginSpreadMult      = SLMarginSpreadMult_FX;
    g_profile.minRR_EntryGate         = MinRR_EntryGate_FX;
    g_profile.minRangeCostMult        = MinRangeCostMult_FX;
    g_profile.tpExtensionRatio        = TPExtRatio_FX;

@@ -58,6 +58,7 @@ input ENUM_SS_LOG_LEVEL LogLevel               = SS_LOG_ANALYZE;  // Log Level
 input int               M5_EMA_Fast            = 13;             // M5 EMA Fast Period
 input int               M5_EMA_Slow            = 21;             // M5 EMA Slow Period
 input bool              UseEMA                 = true;           // true: EMA / false: SMA
+input double            SlopeMinATR            = 0.05;           // Slope minimum (ATR fraction, 0=disable)
 
 // === G3: H1 EMA (Direction Filter) ===
 input int               H1_EMA_Fast            = 13;             // H1 EMA Fast Period
@@ -305,7 +306,7 @@ void OnTick()
 
    // Filter evaluation
    bool passRegime  = (crossSignal == g_h1Regime);
-   bool passSlope   = CheckSlopeFilter(crossSignal);
+   bool passSlope   = CheckSlopeFilter(crossSignal, atr);
    bool passTime    = CheckTimeFilter();
    bool passSpread  = CheckSpreadFilter();
    bool hasPosition = (g_posTicket > 0);
@@ -474,7 +475,7 @@ int DetectM5Cross()
 //+------------------------------------------------------------------+
 //| Check M5 Slope Filter                                             |
 //+------------------------------------------------------------------+
-bool CheckSlopeFilter(int direction)
+bool CheckSlopeFilter(int direction, double atr)
 {
    double fast[], slow[];
    ArraySetAsSeries(fast, true);
@@ -488,6 +489,14 @@ bool CheckSlopeFilter(int direction)
 
    double slopeFast = fast[0] - fast[1];  // EMA_Fast[1] - EMA_Fast[2]
    double slopeSlow = slow[0] - slow[1];  // EMA_Slow[1] - EMA_Slow[2]
+
+   // Minimum slope magnitude check (ATR-normalized)
+   if(SlopeMinATR > 0 && atr > 0)
+   {
+      double threshold = atr * SlopeMinATR;
+      if(MathAbs(slopeFast) < threshold || MathAbs(slopeSlow) < threshold)
+         return false;
+   }
 
    if(direction == 1)
       return (slopeFast > 0 && slopeSlow > 0);

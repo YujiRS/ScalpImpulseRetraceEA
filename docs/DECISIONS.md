@@ -390,6 +390,18 @@
 - **没案:** MicroBreak Lookback を維持 → MA Bounce の HTF 足単位判定と M1 足単位判定の混在は複雑であり、GOLD と異なる判定方式にする合理的理由がない
 - **影響:** SPEC.md 第7節・EA一覧・MarketProfile表を更新。ADR-005（Confirm条件の市場別差異化）の CRYPTO 欄を上書き
 
+### [ADR-023] SwingSignalEA スロープ最小勾配フィルター（ATR正規化）
+
+- **日付:** 2026-03-13
+- **状況:** SwingSignalEA の M5 スロープフィルターは方向（> 0 / < 0）のみ判定しており、EMA がほぼフラットな状態でもわずかな揺らぎでクロスが成立しエントリーしてしまう。USDJPY 2026.03.13 08:35 の BUY（SlopeFast=0.002, SlopeSlow=0.001, ATR=0.056）が実例
+- **決定:** ATR 正規化した最小勾配閾値（`SlopeMinATR`）を導入。`|slope| < ATR × SlopeMinATR` の場合 REJECT_SLOPE。デフォルト 0.05
+- **理由:**
+  - FX版 EntryEngine の `ClassifyM5Slope`（ATR×0.03 で MID/STRONG 判定）と同じアプローチで一貫性がある
+  - ATR 正規化により通貨ペア・ボラティリティ差に自動適応
+  - `atan()` による角度（度数）変換は X 軸スケールが恣意的になるため不採用
+- **没案:** atan(slope) で度数に変換し閾値判定 → X軸（1バー）のスケール定義が恣意的で通貨ペア間の統一基準にならない
+- **影響:** SwingSignalEA.mq5 の `CheckSlopeFilter` 改修、Input パラメータ `SlopeMinATR` 追加。既存の REJECT_SLOPE / PassSlope をそのまま使用
+
 ---
 
 ## 未記録の意思決定（コードから推定されるが根拠不明）

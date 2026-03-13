@@ -49,18 +49,27 @@ H1 EMA の**位置関係のみ**で方向を決定。クロスの「発生」は
 
 ### 3. 方向性フィルター（M5 スロープ）
 
-M5 クロス発生時点で、両 EMA のスロープが同方向であること。
+M5 クロス発生時点で、両 EMA のスロープが同方向かつ最小勾配以上であること。
+
+```
+SlopeFast = EMA_Fast[1] - EMA_Fast[2]
+SlopeSlow = EMA_Slow[1] - EMA_Slow[2]
+threshold = ATR(M5) × SlopeMinATR
+```
+
+**方向チェック:**
 
 | GC | DC |
 |---|---|
 | `SlopeFast > 0 かつ SlopeSlow > 0` | `SlopeFast < 0 かつ SlopeSlow < 0` |
 
-```
-SlopeFast = EMA_Fast[1] - EMA_Fast[2]
-SlopeSlow = EMA_Slow[1] - EMA_Slow[2]
-```
+**最小勾配チェック（SlopeMinATR > 0 の場合）:**
 
-ゼロちょうどは不成立。
+| 条件 | 結果 |
+|---|---|
+| `|SlopeFast| < threshold` OR `|SlopeSlow| < threshold` | REJECT_SLOPE |
+
+ゼロちょうどは不成立。SlopeMinATR = 0 で最小勾配チェック無効。
 
 ### 4. エントリー条件（すべて AND）
 
@@ -192,6 +201,7 @@ H1 EMA 位置関係が逆転 → **無条件で即決済**。
 | G2: M5 EMA | M5_EMA_Fast | 13 | M5 EMA Fast 期間 |
 | | M5_EMA_Slow | 21 | M5 EMA Slow 期間 |
 | | UseEMA | true | true: EMA / false: SMA |
+| | SlopeMinATR | 0.05 | スロープ最小閾値（ATR比率、0=無効） |
 | G3: H1 EMA | H1_EMA_Fast | 13 | H1 EMA Fast 期間 |
 | | H1_EMA_Slow | 21 | H1 EMA Slow 期間 |
 | G4: H1 Swing | H1_SwingStrength | 5 | Swing 左右比較本数 |

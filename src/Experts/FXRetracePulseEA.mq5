@@ -509,9 +509,10 @@ void Process_IMPULSE_CONFIRMED()
       double _point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
       double _spread = SymbolInfoDouble(Symbol(), SYMBOL_ASK) - SymbolInfoDouble(Symbol(), SYMBOL_BID);
 
+      double _slMargin = _spread * g_profile.slMarginSpreadMult;
       _sl = (g_impulseDir == DIR_LONG)
-            ? (g_impulseStart - _atr * g_profile.slATRMult)
-            : (g_impulseStart + _atr * g_profile.slATRMult);
+            ? (g_impulseStart - _atr * g_profile.slATRMult - _slMargin)
+            : (g_impulseStart + _atr * g_profile.slATRMult + _slMargin);
 
       double _risk   = MathAbs(_entry - _sl);
       double _reward = MathAbs(_tp - _entry);

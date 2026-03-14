@@ -42,8 +42,8 @@ enum ENUM_LOG_LEVEL
 // ロットモード
 enum ENUM_LOT_MODE
 {
-   LOT_MODE_FIXED        = 0, // FIXED
-   LOT_MODE_RISK_PERCENT = 1  // RISK_PERCENT
+   LOT_MODE_FIXED        = 0, // Fixed
+   LOT_MODE_RISK_PERCENT = 1  // Risk %
 };
 
 // スプレッドモード

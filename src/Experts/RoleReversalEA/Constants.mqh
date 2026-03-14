@@ -36,10 +36,10 @@ enum ENUM_CONFIRM_PATTERN
 };
 
 //--- Lot Mode
-enum ENUM_RR_LOT_MODE
+enum ENUM_LOT_MODE
 {
-   RR_LOT_FIXED = 0,               // FIXED
-   RR_LOT_RISK_PERCENT = 1,        // RISK_PERCENT
+   LOT_MODE_FIXED        = 0,      // Fixed
+   LOT_MODE_RISK_PERCENT = 1,      // Risk %
 };
 
 //--- Log Level

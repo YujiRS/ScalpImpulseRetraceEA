@@ -134,7 +134,7 @@ bool ExecuteEntry()
    request.symbol    = Symbol();
    request.volume    = (LotMode == LOT_MODE_RISK_PERCENT)
                        ? CalcRiskPercentLot(price, g_sl)
-                       : FixedLot;
+                       : (FixedLot <= 0 ? SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN) : FixedLot);
 
    //--- 証拠金維持率チェック（全LotMode共通）
    if(MinMarginLevel > 0)

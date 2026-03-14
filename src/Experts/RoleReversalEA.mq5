@@ -23,8 +23,8 @@
 
 // === G1: Operation ===
 input bool              EnableTrading          = true;           // Enable Trading
-input ENUM_RR_LOT_MODE  LotMode                = RR_LOT_FIXED;  // Lot Mode
-input double            FixedLot               = 0.01;          // Fixed Lot
+input ENUM_LOT_MODE     LotMode                = LOT_MODE_FIXED;  // Lot Mode
+input double            FixedLot               = 0.01;          // Fixed Lot (0=min lot)
 input double            RiskPercent            = 1.0;            // Risk % (of equity)
 input double            MinMarginLevel         = 1500;           // MinMarginLevel(%) min margin level after entry
 input ENUM_RR_LOG_LEVEL LogLevel               = RR_LOG_NORMAL; // Log Level
@@ -1066,8 +1066,8 @@ bool ExecuteEntry(int direction, double sl, double tp, ENUM_CONFIRM_PATTERN conf
 //+------------------------------------------------------------------+
 double CalculateLot(double entryPrice, double slPrice)
 {
-   if(LotMode == RR_LOT_FIXED)
-      return FixedLot;
+   if(LotMode == LOT_MODE_FIXED)
+      return (FixedLot <= 0) ? SymbolInfoDouble(Symbol(), SYMBOL_VOLUME_MIN) : FixedLot;
 
    // Risk-based lot calculation
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);

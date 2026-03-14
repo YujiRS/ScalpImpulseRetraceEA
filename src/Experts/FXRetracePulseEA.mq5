@@ -25,8 +25,8 @@
 input bool              EnableTrading          = true;           // EnableTrading(false=ロジック稼働・Entry禁止)
 input bool              UseLimitEntry          = true;           // UseLimitEntry
 input bool              UseMarketFallback      = true;           // UseMarketFallback
-input ENUM_LOT_MODE     LotMode                = LOT_MODE_FIXED; // LotMode
-input double            FixedLot               = 0.01;           // FixedLot
+input ENUM_LOT_MODE     LotMode                = LOT_MODE_FIXED; // Lot Mode
+input double            FixedLot               = 0.01;           // Fixed Lot (0=min lot)
 input double            RiskPercent            = 1.0;            // RiskPercent (有効証拠金の%)
 input double            MinMarginLevel         = 1500;           // MinMarginLevel(%) エントリー後維持率下限
 input ENUM_LOG_LEVEL    LogLevel               = LOG_LEVEL_NORMAL; // LogLevel

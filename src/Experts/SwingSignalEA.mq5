@@ -12,10 +12,10 @@
 //+------------------------------------------------------------------+
 //| ENUM Definitions                                                  |
 //+------------------------------------------------------------------+
-enum ENUM_SS_LOT_MODE
+enum ENUM_LOT_MODE
 {
-   SS_LOT_FIXED        = 0,  // Fixed Lot
-   SS_LOT_RISK_PERCENT = 1,  // Risk % of Equity
+   LOT_MODE_FIXED        = 0,  // Fixed
+   LOT_MODE_RISK_PERCENT = 1,  // Risk %
 };
 
 enum ENUM_REVERSE_MODE
@@ -37,8 +37,8 @@ enum ENUM_SS_LOG_LEVEL
 
 // === G1: Operation ===
 input bool              EnableTrading          = true;                       // Enable Trading
-input ENUM_SS_LOT_MODE  LotMode                = SS_LOT_FIXED;              // Lot Mode
-input double            FixedLot               = 0.01;                      // Fixed Lot
+input ENUM_LOT_MODE     LotMode                = LOT_MODE_FIXED;            // Lot Mode
+input double            FixedLot               = 0.01;                      // Fixed Lot (0=min lot)
 input double            RiskPercent            = 1.0;                        // Risk % (of equity)
 input double            MinMarginLevel         = 1500;                       // Min margin level after entry (%, 0=off)
 input string            InstanceTag            = "";                         // Instance Tag (comment)
@@ -690,9 +690,9 @@ double CalculateLot(double slDistance)
 {
    double lot = 0;
 
-   if(LotMode == SS_LOT_FIXED)
+   if(LotMode == LOT_MODE_FIXED)
    {
-      lot = FixedLot;
+      lot = (FixedLot <= 0) ? SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN) : FixedLot;
    }
    else
    {

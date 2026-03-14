@@ -138,6 +138,11 @@ int      g_tradeH1Regime   = 0;
 int      g_tradeTrailCount = 0;
 double   g_tradePeakHigh   = 0;
 double   g_tradePeakLow    = DBL_MAX;
+// HTF snapshot at entry time
+string   g_tradeH4Dir      = "";
+string   g_tradeD1Dir      = "";
+double   g_tradeH4ATR      = 0;
+double   g_tradeD1ATR      = 0;
 
 // Panel
 const string g_panelPrefix = "SS_Panel_";
@@ -850,6 +855,7 @@ bool ExecuteEntry(int direction, double lot, double sl, double tp, double atr)
    g_tradeTrailCount = 0;
    g_tradePeakHigh   = g_posOpenPrice;
    g_tradePeakLow    = g_posOpenPrice;
+   SS_CaptureHTFAtEntry();
 
    // Persist ticket in GlobalVariable for restart recovery
    if(g_posTicket > 0)
@@ -1179,6 +1185,7 @@ void FindOwnPosition()
    g_tradeATR       = 0;     // lost across restarts
    g_tradeSpread    = 0;     // lost across restarts
    g_tradeTrailCount = 0;    // lost across restarts
+   SS_CaptureHTFAtEntry();   // best-effort (current, not original entry time)
 
    ReconstructTrailTrackers();
 }
@@ -1255,6 +1262,10 @@ void ResetPositionState()
    g_tradeTrailCount = 0;
    g_tradePeakHigh   = 0;
    g_tradePeakLow    = DBL_MAX;
+   g_tradeH4Dir      = "";
+   g_tradeD1Dir      = "";
+   g_tradeH4ATR      = 0;
+   g_tradeD1ATR      = 0;
 
    // Clear persisted ticket
    if(g_gvKey != "")
@@ -1282,6 +1293,54 @@ void SendNotification_SS(string msg)
       else
          PlaySound(SoundFileName);
    }
+}
+
+//+------------------------------------------------------------------+
+//| HTF ヘルパー: EMA/ATR 取得（オンデマンド生成・即解放）                  |
+//+------------------------------------------------------------------+
+double SS_GetMAValue(ENUM_TIMEFRAMES tf, int period, int shift)
+{
+   int h = iMA(_Symbol, tf, period, 0, MODE_EMA, PRICE_CLOSE);
+   if(h == INVALID_HANDLE) return EMPTY_VALUE;
+   double buf[];
+   ArraySetAsSeries(buf, true);
+   if(CopyBuffer(h, 0, shift, 1, buf) != 1) { IndicatorRelease(h); return EMPTY_VALUE; }
+   double val = buf[0];
+   IndicatorRelease(h);
+   return val;
+}
+
+double SS_GetATRValue(ENUM_TIMEFRAMES tf, int period, int shift)
+{
+   int h = iATR(_Symbol, tf, period);
+   if(h == INVALID_HANDLE) return EMPTY_VALUE;
+   double buf[];
+   ArraySetAsSeries(buf, true);
+   if(CopyBuffer(h, 0, shift, 1, buf) != 1) { IndicatorRelease(h); return EMPTY_VALUE; }
+   double val = buf[0];
+   IndicatorRelease(h);
+   return val;
+}
+
+string SS_GetEMADir(ENUM_TIMEFRAMES tf, int period)
+{
+   double ema1 = SS_GetMAValue(tf, period, 1);
+   double ema2 = SS_GetMAValue(tf, period, 2);
+   if(ema1 == EMPTY_VALUE || ema2 == EMPTY_VALUE) return "";
+   if(ema1 > ema2) return "LONG";
+   if(ema1 < ema2) return "SHORT";
+   return "FLAT";
+}
+
+// エントリー時に呼ばれる: HTF情報をグローバルに保存
+void SS_CaptureHTFAtEntry()
+{
+   g_tradeH4Dir = SS_GetEMADir(PERIOD_H4, 50);
+   g_tradeD1Dir = SS_GetEMADir(PERIOD_D1, 50);
+   double h4a = SS_GetATRValue(PERIOD_H4, 14, 1);
+   double d1a = SS_GetATRValue(PERIOD_D1, 14, 1);
+   g_tradeH4ATR = (h4a != EMPTY_VALUE) ? h4a : 0;
+   g_tradeD1ATR = (d1a != EMPTY_VALUE) ? d1a : 0;
 }
 
 //+------------------------------------------------------------------+
@@ -1334,7 +1393,11 @@ void WriteSignalLog(int direction, string outcome, double price, double atr, lon
                  (passSpread  ? "1" : "0") + "\t" +
                  (passPriceCtrl ? "1" : "0") + "\t" +
                  (passSLWidth ? "1" : "0") + "\t" +
-                 (passMargin  ? "1" : "0") + "\n";
+                 (passMargin  ? "1" : "0") + "\t" +
+                 SS_GetEMADir(PERIOD_H4, 50) + "\t" +
+                 SS_GetEMADir(PERIOD_D1, 50) + "\t" +
+                 DoubleToString((SS_GetATRValue(PERIOD_H4, 14, 1) != EMPTY_VALUE) ? SS_GetATRValue(PERIOD_H4, 14, 1) : 0, digits) + "\t" +
+                 DoubleToString((SS_GetATRValue(PERIOD_D1, 14, 1) != EMPTY_VALUE) ? SS_GetATRValue(PERIOD_D1, 14, 1) : 0, digits) + "\n";
 
    FileWriteString(g_signalLogHandle, line);
    FileFlush(g_signalLogHandle);
@@ -1375,7 +1438,8 @@ void OpenSignalLog()
                       "H1Regime\tH1Fast\tH1Slow\t"
                       "SL\tTP\tSL_DistPts\tTP_DistPts\tRR\tSwingTP\tFallbackUsed\t"
                       "Lot\tServerHour\t"
-                      "PassRegime\tPassSlope\tPassTime\tPassSpread\tPassPriceCtrl\tPassSLWidth\tPassMargin\n";
+                      "PassRegime\tPassSlope\tPassTime\tPassSpread\tPassPriceCtrl\tPassSLWidth\tPassMargin\t"
+                      "H4_EMA50_Dir\tD1_EMA50_Dir\tH4_ATR14\tD1_ATR14\n";
       FileWriteString(g_signalLogHandle, header);
    }
    else
@@ -1433,7 +1497,11 @@ void WriteTradeLog(datetime entryTime, datetime exitTime, int direction,
                  IntegerToString(spreadEntry) + "\t" +
                  regimeStr + "\t" +
                  DoubleToString(mfePts, 1) + "\t" +
-                 DoubleToString(maePts, 1) + "\n";
+                 DoubleToString(maePts, 1) + "\t" +
+                 g_tradeH4Dir + "\t" +
+                 g_tradeD1Dir + "\t" +
+                 DoubleToString(g_tradeH4ATR, digits) + "\t" +
+                 DoubleToString(g_tradeD1ATR, digits) + "\n";
 
    FileWriteString(g_tradeLogHandle, line);
    FileFlush(g_tradeLogHandle);
@@ -1472,7 +1540,8 @@ void OpenTradeLog()
       string header = "EntryTime\tExitTime\tSymbol\tDir\tEntryPrice\tExitPrice\tLot\t"
                       "SL_Initial\tSL_Final\tTP\tProfitPts\tProfitMoney\tHoldBarsM5\t"
                       "ExitReason\tTrailCount\tATR_Entry\tSpreadEntry\tH1Regime_Entry\t"
-                      "MFE_Pts\tMAE_Pts\n";
+                      "MFE_Pts\tMAE_Pts\t"
+                      "H4_EMA50_Dir_Entry\tD1_EMA50_Dir_Entry\tH4_ATR14_Entry\tD1_ATR14_Entry\n";
       FileWriteString(g_tradeLogHandle, header);
    }
    else

@@ -96,7 +96,9 @@ void LoggerInit()
                       "StartAdjusted\tDeepBandON\tImpulseATR\tStartPrice\tEndPrice\t"
                       "BandLower\tBandUpper\tTouchCount\tFreezeCancelCount\t"
                       "ConfirmType\tEntryType\tEntryPrice\tSL\tTP\t"
-                      "SpreadPts\tSlippagePts\tFillDeviationPts\tResult\tRejectReason\tExtra";
+                      "SpreadPts\tSlippagePts\tFillDeviationPts\tResult\tRejectReason\tExtra\t"
+                      "M15_EMA50\tM15_EMA50_Dir\tH1_EMA50\tH1_EMA50_Dir\t"
+                      "H4_EMA50\tH4_EMA50_Dir\tD1_EMA50\tD1_EMA50_Dir\tH4_ATR14\tD1_ATR14";
       FileWriteString(g_logFileHandle, header + "\n");
       FileFlush(g_logFileHandle);
    }
@@ -151,7 +153,9 @@ void DumpImpulseSummary()
          // --- EMA Cross Filter / Impulse Exceed Filter
          "EMACrossFilterEnable\tEMACrossFastVal\tEMACrossSlowVal\t"
          "EMACrossDir\tEMACrossAligned\t"
-         "ImpulseExceedEnable\tImpulseRangeATR\tImpulseExceedMax\tImpulseExceedTriggered";
+         "ImpulseExceedEnable\tImpulseRangeATR\tImpulseExceedMax\tImpulseExceedTriggered\t"
+         // --- HTF Snapshot (H4/D1)
+         "H4_EMA50\tH4_EMA50_Dir\tD1_EMA50\tD1_EMA50_Dir\tH4_ATR14\tD1_ATR14";
       FileWriteString(handle, header + "\n");
    }
 
@@ -241,9 +245,75 @@ void DumpImpulseSummary()
       DoubleToString(g_stats.ImpulseExceedMax, 2) + "\t" +
       ((g_stats.ImpulseExceedTriggered>=0) ? IntegerToString(g_stats.ImpulseExceedTriggered) : "");
 
+   // --- HTF Snapshot (H4/D1) をインラインで取得・追記
+   {
+      string sym = Symbol();
+      double h4_ema1 = GetMAValue(sym, PERIOD_H4, 50, MODE_EMA, PRICE_CLOSE, 1);
+      double h4_ema2 = GetMAValue(sym, PERIOD_H4, 50, MODE_EMA, PRICE_CLOSE, 2);
+      string h4_dir = (h4_ema1 == EMPTY_VALUE || h4_ema2 == EMPTY_VALUE) ? "" :
+                      (h4_ema1 > h4_ema2) ? "LONG" : (h4_ema1 < h4_ema2) ? "SHORT" : "FLAT";
+      double d1_ema1 = GetMAValue(sym, PERIOD_D1, 50, MODE_EMA, PRICE_CLOSE, 1);
+      double d1_ema2 = GetMAValue(sym, PERIOD_D1, 50, MODE_EMA, PRICE_CLOSE, 2);
+      string d1_dir = (d1_ema1 == EMPTY_VALUE || d1_ema2 == EMPTY_VALUE) ? "" :
+                      (d1_ema1 > d1_ema2) ? "LONG" : (d1_ema1 < d1_ema2) ? "SHORT" : "FLAT";
+      double h4_atr = GetATRValue(sym, PERIOD_H4, 14, 1);
+      double d1_atr = GetATRValue(sym, PERIOD_D1, 14, 1);
+
+      line += "\t" +
+         ((h4_ema1 != EMPTY_VALUE) ? DoubleToString(h4_ema1, digits) : "") + "\t" + h4_dir + "\t" +
+         ((d1_ema1 != EMPTY_VALUE) ? DoubleToString(d1_ema1, digits) : "") + "\t" + d1_dir + "\t" +
+         ((h4_atr != EMPTY_VALUE) ? DoubleToString(h4_atr, digits) : "") + "\t" +
+         ((d1_atr != EMPTY_VALUE) ? DoubleToString(d1_atr, digits) : "");
+   }
+
    FileWriteString(handle, line + "\n");
 
    FileClose(handle);
+}
+
+//+------------------------------------------------------------------+
+//| HTF Snapshot: M15/H1/H4/D1 EMA50方向 + H4/D1 ATR               |
+//| 約定前後の上位足コンテキストを解析ログに記録する                       |
+//+------------------------------------------------------------------+
+string BuildHTFSnapshot()
+{
+   int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+   string sym = Symbol();
+
+   // M15 EMA50
+   double m15_ema1 = GetMAValue(sym, PERIOD_M15, 50, MODE_EMA, PRICE_CLOSE, 1);
+   double m15_ema2 = GetMAValue(sym, PERIOD_M15, 50, MODE_EMA, PRICE_CLOSE, 2);
+   string m15_dir = (m15_ema1 == EMPTY_VALUE || m15_ema2 == EMPTY_VALUE) ? "" :
+                    (m15_ema1 > m15_ema2) ? "LONG" : (m15_ema1 < m15_ema2) ? "SHORT" : "FLAT";
+
+   // H1 EMA50
+   double h1_ema1 = GetMAValue(sym, PERIOD_H1, 50, MODE_EMA, PRICE_CLOSE, 1);
+   double h1_ema2 = GetMAValue(sym, PERIOD_H1, 50, MODE_EMA, PRICE_CLOSE, 2);
+   string h1_dir = (h1_ema1 == EMPTY_VALUE || h1_ema2 == EMPTY_VALUE) ? "" :
+                   (h1_ema1 > h1_ema2) ? "LONG" : (h1_ema1 < h1_ema2) ? "SHORT" : "FLAT";
+
+   // H4 EMA50
+   double h4_ema1 = GetMAValue(sym, PERIOD_H4, 50, MODE_EMA, PRICE_CLOSE, 1);
+   double h4_ema2 = GetMAValue(sym, PERIOD_H4, 50, MODE_EMA, PRICE_CLOSE, 2);
+   string h4_dir = (h4_ema1 == EMPTY_VALUE || h4_ema2 == EMPTY_VALUE) ? "" :
+                   (h4_ema1 > h4_ema2) ? "LONG" : (h4_ema1 < h4_ema2) ? "SHORT" : "FLAT";
+
+   // D1 EMA50
+   double d1_ema1 = GetMAValue(sym, PERIOD_D1, 50, MODE_EMA, PRICE_CLOSE, 1);
+   double d1_ema2 = GetMAValue(sym, PERIOD_D1, 50, MODE_EMA, PRICE_CLOSE, 2);
+   string d1_dir = (d1_ema1 == EMPTY_VALUE || d1_ema2 == EMPTY_VALUE) ? "" :
+                   (d1_ema1 > d1_ema2) ? "LONG" : (d1_ema1 < d1_ema2) ? "SHORT" : "FLAT";
+
+   // H4/D1 ATR14
+   double h4_atr = GetATRValue(sym, PERIOD_H4, 14, 1);
+   double d1_atr = GetATRValue(sym, PERIOD_D1, 14, 1);
+
+   return ((m15_ema1 != EMPTY_VALUE) ? DoubleToString(m15_ema1, digits) : "") + "\t" + m15_dir + "\t" +
+          ((h1_ema1 != EMPTY_VALUE) ? DoubleToString(h1_ema1, digits) : "") + "\t" + h1_dir + "\t" +
+          ((h4_ema1 != EMPTY_VALUE) ? DoubleToString(h4_ema1, digits) : "") + "\t" + h4_dir + "\t" +
+          ((d1_ema1 != EMPTY_VALUE) ? DoubleToString(d1_ema1, digits) : "") + "\t" + d1_dir + "\t" +
+          ((h4_atr != EMPTY_VALUE) ? DoubleToString(h4_atr, digits) : "") + "\t" +
+          ((d1_atr != EMPTY_VALUE) ? DoubleToString(d1_atr, digits) : "");
 }
 
 // ログ1行出力
@@ -312,7 +382,8 @@ void WriteLog(ENUM_LOG_EVENT event,
                  DoubleToString(fillDeviationPts, 1) + "\t" +
                  result + "\t" +
                  rejectReason + "\t" +
-                 extra;
+                 extra + "\t" +
+                 BuildHTFSnapshot();
 
    FileWriteString(g_logFileHandle, line + "\n");
    FileFlush(g_logFileHandle);

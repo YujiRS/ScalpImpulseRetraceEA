@@ -110,6 +110,24 @@ ulong         g_posTicket = 0;
 double        g_posSL = 0;
 double        g_posTP = 0;
 
+// Trade lifecycle tracking (entry time snapshot for Trade Summary log)
+datetime      g_rrTradeEntryTime = 0;
+double        g_rrTradeEntryPrice = 0;
+double        g_rrTradeSL = 0;
+double        g_rrTradeTP = 0;
+double        g_rrTradeLot = 0;
+double        g_rrTradeSRLevel = 0;
+int           g_rrTradeDir = 0;
+string        g_rrTradePattern = "";
+double        g_rrTradeSpreadEntry = 0;
+double        g_rrTradeATREntry = 0;
+string        g_rrTradeM15Dir = "";
+string        g_rrTradeH1Dir = "";
+string        g_rrTradeH4Dir = "";
+string        g_rrTradeD1Dir = "";
+double        g_rrTradeH4ATR = 0;
+double        g_rrTradeD1ATR = 0;
+
 //+------------------------------------------------------------------+
 //| Module Includes (グローバル変数定義後)                               |
 //+------------------------------------------------------------------+
@@ -948,6 +966,28 @@ void WaitForPullbackAndConfirm()
 
          RR_WriteLog(RR_LOG_ENTRY, tradeDir, levelPrice, entry, sl, tp,
                      ConfirmPatternName(confirm), "");
+
+         // エントリー時スナップショットを保存（Trade Summary用）
+         g_rrTradeEntryTime  = TimeCurrent();
+         g_rrTradeEntryPrice = entry;
+         g_rrTradeSL         = sl;
+         g_rrTradeTP         = tp;
+         g_rrTradeSRLevel    = levelPrice;
+         g_rrTradeDir        = tradeDir;
+         g_rrTradePattern    = ConfirmPatternName(confirm);
+         g_rrTradeSpreadEntry = (double)SymbolInfoInteger(Symbol(), SYMBOL_SPREAD);
+         g_rrTradeATREntry   = RR_GetATR_M5(1);
+         g_rrTradeM15Dir     = RR_GetEMADir(PERIOD_M15, 50);
+         g_rrTradeH1Dir      = RR_GetEMADir(PERIOD_H1, 50);
+         g_rrTradeH4Dir      = RR_GetEMADir(PERIOD_H4, 50);
+         g_rrTradeD1Dir      = RR_GetEMADir(PERIOD_D1, 50);
+         double h4a = RR_GetATRValue(PERIOD_H4, 14, 1);
+         double d1a = RR_GetATRValue(PERIOD_D1, 14, 1);
+         g_rrTradeH4ATR = (h4a != EMPTY_VALUE) ? h4a : 0;
+         g_rrTradeD1ATR = (d1a != EMPTY_VALUE) ? d1a : 0;
+         if(g_posTicket > 0 && PositionSelectByTicket(g_posTicket))
+            g_rrTradeLot = PositionGetDouble(POSITION_VOLUME);
+
          string confirmName = ConfirmPatternName(confirm);
          string msg = StringFormat("RoleReversal ENTRY: %s @ %s SL=%s TP=%s Pattern=%s Level=%s",
                                     (tradeDir == RR_DIR_LONG ? "LONG" : "SHORT"),
@@ -1129,7 +1169,60 @@ void ManagePosition()
    if(!CheckExistingPosition())
    {
       Print("Position closed externally or by SL/TP");
-      RR_WriteLog(RR_LOG_EXIT, 0, 0, 0, 0, 0, "", "CLOSED_EXTERNALLY_OR_SLTP");
+
+      // 決済情報を取得してログ出力
+      double exitPrice = 0;
+      double profitMoney = 0;
+      double profitPts = 0;
+      string exitReason = "CLOSED_EXTERNALLY_OR_SLTP";
+      int digits = (int)SymbolInfoInteger(Symbol(), SYMBOL_DIGITS);
+      double point = SymbolInfoDouble(Symbol(), SYMBOL_POINT);
+
+      // HistorySelectByPosition で決済Deal情報を取得
+      if(g_rrTradeEntryTime > 0 && HistorySelect(g_rrTradeEntryTime, TimeCurrent() + 3600))
+      {
+         int totalDeals = HistoryDealsTotal();
+         for(int i = totalDeals - 1; i >= 0; i--)
+         {
+            ulong dealTicket = HistoryDealGetTicket(i);
+            if(dealTicket == 0) continue;
+            long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+            if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_OUT_BY)
+            {
+               exitPrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+               profitMoney = HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
+                           + HistoryDealGetDouble(dealTicket, DEAL_SWAP)
+                           + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+               long dealReason = HistoryDealGetInteger(dealTicket, DEAL_REASON);
+               if(dealReason == DEAL_REASON_SL) exitReason = "SL_HIT";
+               else if(dealReason == DEAL_REASON_TP) exitReason = "TP_HIT";
+               break;
+            }
+         }
+         if(exitPrice > 0 && g_rrTradeEntryPrice > 0 && point > 0)
+         {
+            if(g_rrTradeDir == RR_DIR_LONG)
+               profitPts = (exitPrice - g_rrTradeEntryPrice) / point;
+            else if(g_rrTradeDir == RR_DIR_SHORT)
+               profitPts = (g_rrTradeEntryPrice - exitPrice) / point;
+         }
+      }
+
+      RR_WriteLog(RR_LOG_EXIT, g_rrTradeDir, g_rrTradeSRLevel, exitPrice,
+                  g_rrTradeSL, g_rrTradeTP, g_rrTradePattern, exitReason);
+
+      // Trade Summary ログ出力
+      RR_WriteTradeLog(g_rrTradeEntryTime, TimeCurrent(),
+                       g_rrTradeDir, g_rrTradeSRLevel,
+                       g_rrTradeEntryPrice, exitPrice, g_rrTradeLot,
+                       g_rrTradeSL, g_rrTradeTP,
+                       profitPts, profitMoney,
+                       g_rrTradePattern, exitReason,
+                       g_rrTradeSpreadEntry, g_rrTradeATREntry,
+                       g_rrTradeM15Dir, g_rrTradeH1Dir,
+                       g_rrTradeH4Dir, g_rrTradeD1Dir,
+                       g_rrTradeH4ATR, g_rrTradeD1ATR);
+
       GlobalVariableDel(RR_GVKey("ticket"));
       g_state = RR_COOLDOWN;
       g_posTicket = 0;
@@ -1200,6 +1293,24 @@ void ResetState()
    g_confirmCount = 0;
    g_lastConfirm = CONFIRM_NONE;
    g_state = RR_IDLE;
+
+   // Trade lifecycle tracking リセット
+   g_rrTradeEntryTime = 0;
+   g_rrTradeEntryPrice = 0;
+   g_rrTradeSL = 0;
+   g_rrTradeTP = 0;
+   g_rrTradeLot = 0;
+   g_rrTradeSRLevel = 0;
+   g_rrTradeDir = 0;
+   g_rrTradePattern = "";
+   g_rrTradeSpreadEntry = 0;
+   g_rrTradeATREntry = 0;
+   g_rrTradeM15Dir = "";
+   g_rrTradeH1Dir = "";
+   g_rrTradeH4Dir = "";
+   g_rrTradeD1Dir = "";
+   g_rrTradeH4ATR = 0;
+   g_rrTradeD1ATR = 0;
 }
 
 //+------------------------------------------------------------------+
